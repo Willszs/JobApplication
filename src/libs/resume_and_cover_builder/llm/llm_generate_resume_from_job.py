@@ -46,6 +46,8 @@ class LLMResumeJobDescription(LLMResumer):
 
         logger.info(f"[JD] summarize_prompt_template exists? {hasattr(self.strings, 'summarize_prompt_template')}")
         logger.debug(f"[JD] summarize_prompt_template preview:\n{getattr(self.strings, 'summarize_prompt_template', '')[:300]}")
+
+        summary = chain.invoke({"text": job_description_text}) or ""
         logger.debug(f"[OUTPUT summarize] ===== START =====\n{summary[:2000]}\n===== END =====")
 
         # 属性持久化
@@ -210,7 +212,7 @@ class LLMResumeJobDescription(LLMResumer):
             else:
                 logger.debug(f"[B1] LLM raw output (non-str)={output!r}")
 
-            return output
+            return self._normalize_additional_skills_html(output)
 
         except Exception as exc:
             logger.exception(f"[ERR] generate_additional_skills_section failed: {exc}")

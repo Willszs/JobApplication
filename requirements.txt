@@ -16,3 +16,5 @@ PyYAML~=6.0.2
 requests>=2.31
 selenium==4.9.1
 webdriver-manager==4.0.2
+
+httpx~=0.27.2

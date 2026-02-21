@@ -134,3 +134,34 @@ a:hover {
     padding-left: 12px;
   }
 }
+
+
+/* Layout safety patch: prevent PDF clipping/truncation */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+.entry-header,
+.entry-details {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.entry-header > *,
+.entry-details > * {
+  min-width: 0;
+}
+
+.entry-name,
+.entry-location,
+.entry-title,
+.entry-year {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@media print {
+  body {
+    max-width: 100% !important;
+  }
+}

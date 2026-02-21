@@ -140,6 +140,29 @@ class LLMResumer:
         """
         return textwrap.dedent(template)
 
+    @staticmethod
+    def _normalize_additional_skills_html(output: str) -> str:
+        """Normalize Additional Skills HTML to avoid accidental bold bleed from malformed tags."""
+        if not isinstance(output, str) or not output.strip():
+            return output
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(output, "html.parser")
+            for li in soup.find_all("li"):
+                text = li.get_text(" ", strip=True)
+                if text.lower().startswith("languages:"):
+                    lang_text = text.split(":", 1)[1].strip() if ":" in text else text
+                    li.clear()
+                    strong = soup.new_tag("strong")
+                    strong.string = "Languages:"
+                    li.append(strong)
+                    if lang_text:
+                        li.append(" " + lang_text)
+            return str(soup)
+        except Exception:
+            return output
+
+
     def set_resume(self, resume) -> None:
         """
         Set the resume object to be used for generating the resume.
@@ -498,8 +521,7 @@ class LLMResumer:
             "skills": skills,
         } if data is None else data
         output = chain.invoke(input_data)
-        
-        return output
+        return self._normalize_additional_skills_html(output)
 
     def generate_html_resume(self) -> str:
         """

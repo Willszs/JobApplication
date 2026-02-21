@@ -122,8 +122,8 @@ def create_cover_letter(parameters: dict, llm_api_key: str):
     """Generate a cover letter PDF tailored to a job description URL."""
     try:
         logger.info("Generating a cover letter based on provided parameters.")
-        resume_facade = _build_resume_facade(parameters, llm_api_key)
         job_url = _prompt_job_url()
+        resume_facade = _build_resume_facade(parameters, llm_api_key)
         resume_facade.link_to_job(job_url)
         result_base64, suggested_name = resume_facade.create_cover_letter()
         output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "cover_letter_tailored.pdf"
@@ -137,8 +137,8 @@ def create_resume_pdf_job_tailored(parameters: dict, llm_api_key: str):
     """Generate a resume PDF tailored to a job description URL."""
     try:
         logger.info("Generating a CV based on provided parameters.")
-        resume_facade = _build_resume_facade(parameters, llm_api_key)
         job_url = _prompt_job_url()
+        resume_facade = _build_resume_facade(parameters, llm_api_key)
         resume_facade.link_to_job(job_url)
         result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored()
         output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "resume_tailored.pdf"
