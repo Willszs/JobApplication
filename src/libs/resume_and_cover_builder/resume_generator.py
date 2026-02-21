@@ -76,7 +76,7 @@ class ResumeGenerator:
     # -------------------------
     # Cover letter tailored to JD
     # -------------------------
-    def create_cover_letter_job_description(self, style_path: str, job_description_text: str) -> str:
+    def create_cover_letter_job_description(self, style_path: str, job_description_text: str, company_name: str = "") -> str:
         strings = load_module(
             global_config.STRINGS_MODULE_COVER_LETTER_JOB_DESCRIPTION_PATH,
             global_config.STRINGS_MODULE_NAME
@@ -84,6 +84,7 @@ class ResumeGenerator:
         gpt_answerer = LLMCoverLetterJobDescription(global_config.API_KEY, strings)
         gpt_answerer.set_resume(self.resume_object)
         gpt_answerer.set_job_description_from_text(job_description_text)
+        gpt_answerer.set_company_name(company_name)
 
         cover_letter_html = gpt_answerer.generate_cover_letter()
         if not isinstance(cover_letter_html, str) or not cover_letter_html.strip():
@@ -94,9 +95,3 @@ class ResumeGenerator:
             style_css = f.read()
 
         return template.substitute(body=cover_letter_html, style_css=style_css)
-
-
-
-    
-    
-    

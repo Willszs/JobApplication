@@ -153,9 +153,7 @@ class LLMResumer:
                 if text.lower().startswith("languages:"):
                     lang_text = text.split(":", 1)[1].strip() if ":" in text else text
                     li.clear()
-                    strong = soup.new_tag("strong")
-                    strong.string = "Languages:"
-                    li.append(strong)
+                    li.append("Languages:")
                     if lang_text:
                         li.append(" " + lang_text)
             return str(soup)

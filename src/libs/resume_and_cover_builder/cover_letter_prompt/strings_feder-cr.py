@@ -10,8 +10,13 @@ Please write the cover letter in a way that directly addresses the job role and 
 
 ## Rules:
 - Do not include any introductions, explanations, or additional information.
+- Always use the provided company name, and never output placeholders like [Company Name].
 
 ## Details :
+- **Target Company Name:**
+```
+{company_name}
+```
 - **Job Description:**
 ```
 {job_description}

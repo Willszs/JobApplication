@@ -230,7 +230,7 @@ prompt_additional_skills_template = """
           <li>[Specific Skill or Technology]</li>
           <li>[Specific Skill or Technology]</li>
           <li>[Specific Skill or Technology]</li>
-          <li><strong>Languages:</strong> </li>
+          <li>Languages: </li>
       </ul>
     </div>
 </section>

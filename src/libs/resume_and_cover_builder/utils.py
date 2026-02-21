@@ -128,6 +128,29 @@ class LoggerChatModel:
         logger.critical("Failed to get a response from the model after multiple attempts.")
         raise Exception("Failed to get a response from the model after multiple attempts.")
 
+    @staticmethod
+    def parse_wait_time_from_error_message(message: str) -> int:
+        """Parse a suggested wait time (seconds) from API error text."""
+        import re
+
+        if not message:
+            return 10
+
+        msg = message.lower()
+
+        # e.g. "try again in 12s" / "retry after 30 seconds"
+        m = re.search(r"(?:try again in|retry after)\s*(\d+)\s*(s|sec|secs|second|seconds)\b", msg)
+        if m:
+            return max(1, int(m.group(1)))
+
+        # e.g. "try again in 2m" / "retry after 1 minute"
+        m = re.search(r"(?:try again in|retry after)\s*(\d+)\s*(m|min|mins|minute|minutes)\b", msg)
+        if m:
+            return max(1, int(m.group(1)) * 60)
+
+        # fallback
+        return 10
+
     def parse_llmresult(self, llmresult: AIMessage) -> Dict[str, Dict]:
         # Parse the LLM result into a structured format.
         content = llmresult.content

@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from requests.exceptions import HTTPError as HTTPStatusError
 from loguru import logger
 from src.libs.resume_and_cover_builder.utils import current_month_year
+
 today = current_month_year(tz="Europe/Berlin", lang="en")
 
 # Load environment variables from .env file
@@ -22,6 +23,7 @@ class LLMCoverLetterJobDescription:
         self.llm_cheap = LoggerChatModel(ChatOpenAI(model_name="gpt-4.1", openai_api_key=openai_api_key, temperature=0.2))
         self.llm_embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
         self.strings = strings
+        self.company_name = ""
 
     @staticmethod
     def _preprocess_template_string(template: str) -> str:
@@ -55,6 +57,20 @@ class LLMCoverLetterJobDescription:
         self.job_description = output
         logger.debug(f"Job description summarization complete: {self.job_description}")
 
+    def set_company_name(self, company_name: str) -> None:
+        """Set company name extracted from the job posting."""
+        self.company_name = (company_name or "").strip()
+
+    @staticmethod
+    def _replace_company_placeholders(html: str, company_name: str) -> str:
+        if not html:
+            return html
+        safe_company = (company_name or "").strip() or "Hiring Team"
+        replacements = ["[Company Name]", "{company_name}", "Company Name"]
+        for marker in replacements:
+            html = html.replace(marker, safe_company)
+        return html
+
     def generate_cover_letter(self) -> str:
         """
         Generate the cover letter based on the job description and resume.
@@ -74,11 +90,13 @@ class LLMCoverLetterJobDescription:
         input_data = {
             "job_description": self.job_description,
             "resume": self.resume,
-            "today": today
+            "company_name": self.company_name,
+            "today": today,
         }
         logger.debug(f"Input data: {input_data}")
 
         output = chain.invoke(input_data)
+        output = self._replace_company_placeholders(output, self.company_name)
         logger.debug(f"Cover letter generation result: {output}")
 
         logger.debug("Cover letter generation completed")
