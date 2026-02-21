@@ -1,0 +1,13 @@
+personal_information:
+  name: "Your Name"
+  surname: "Your Surname"
+  city: "Your City"
+  country: "Your Country"
+  email: "you@example.com"
+
+education_details: []
+experience_details: []
+projects: []
+achievements: []
+languages: []
+interests: []
