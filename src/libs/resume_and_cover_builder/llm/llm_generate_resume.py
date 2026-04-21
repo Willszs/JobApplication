@@ -3,6 +3,10 @@ Create a class that generates a resume based on a resume and a resume template.
 """
 # app/libs/resume_and_cover_builder/gpt_resume.py
 import textwrap
+import os
+import base64
+import mimetypes
+from pathlib import Path
 from src.libs.resume_and_cover_builder.utils import LoggerChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -16,6 +20,7 @@ import re  # 顶部若没有，补上
 
 import html
 from bs4 import BeautifulSoup
+from src.libs.resume_and_cover_builder.config import global_config
 
 def _is_chinese_char(ch: str) -> bool:
     """Rudimentary CJK check for length counting."""
@@ -115,6 +120,135 @@ def _normalize_work_section(html_text: str,
             pass
         return html_text
 
+
+def _resolve_user_data_folder() -> Path | None:
+    """Resolve runtime user_data folder from current config/env."""
+    output_path = getattr(global_config, "LOG_OUTPUT_FILE_PATH", None)
+    if output_path:
+        try:
+            return Path(output_path).resolve().parent
+        except Exception:
+            pass
+
+    env_path = os.getenv("JOBAI_USER_DATA_DIR")
+    if env_path:
+        candidate = Path(env_path).expanduser()
+        if candidate.exists():
+            return candidate.resolve()
+
+    for folder_name in ("user_data", "data_folder"):
+        candidate = (Path.cwd() / folder_name).resolve()
+        if candidate.exists():
+            return candidate
+
+    return None
+
+
+def _find_profile_photo_src() -> str | None:
+    """Auto-discover a profile photo from user_data/photo (or user_data/photos)."""
+    user_data_folder = _resolve_user_data_folder()
+    if not user_data_folder:
+        return None
+
+    supported_suffixes = {".jpg", ".jpeg", ".png", ".webp"}
+    preferred_stems = {"profile", "photo", "avatar", "headshot"}
+    candidate_folders = [user_data_folder / "photo", user_data_folder / "photos"]
+
+    for folder in candidate_folders:
+        if not folder.is_dir():
+            continue
+
+        images = [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in supported_suffixes]
+        if not images:
+            continue
+
+        def _sort_key(path: Path) -> tuple[int, float, str]:
+            stem_priority = 0 if path.stem.lower() in preferred_stems else 1
+            try:
+                mtime_sort = -path.stat().st_mtime
+            except OSError:
+                mtime_sort = 0.0
+            return (stem_priority, mtime_sort, path.name.lower())
+
+        selected = sorted(images, key=_sort_key)[0].resolve()
+        logger.info("Using profile photo from: {}", selected)
+        data_uri = _image_path_to_data_uri(selected)
+        if data_uri:
+            return data_uri
+        logger.warning("Falling back to file URI for profile photo: {}", selected)
+        return selected.as_uri()
+
+    return None
+
+
+def _image_path_to_data_uri(image_path: Path) -> str | None:
+    """Encode local image as data URI to avoid file:// loading restrictions in browser preview."""
+    if not image_path.exists() or not image_path.is_file():
+        return None
+
+    mime_type, _ = mimetypes.guess_type(image_path.name)
+    if mime_type is None:
+        suffix_to_mime = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+        }
+        mime_type = suffix_to_mime.get(image_path.suffix.lower())
+    if not mime_type:
+        return None
+
+    try:
+        image_bytes = image_path.read_bytes()
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+    except OSError as exc:
+        logger.warning("Failed to read profile photo {}: {}", image_path, exc)
+        return None
+
+
+def _inject_profile_photo_in_header(header_html: str) -> str:
+    """Inject profile photo into header if one is found in the photo folder."""
+    if not isinstance(header_html, str) or not header_html.strip():
+        return header_html
+
+    photo_src = _find_profile_photo_src()
+    if not photo_src:
+        return header_html
+
+    try:
+        soup = BeautifulSoup(header_html, "html.parser")
+        header = soup.find("header")
+        if not header:
+            return header_html
+
+        if header.find("img", class_="profile-photo"):
+            return str(soup)
+
+        header_classes = header.get("class", [])
+        if "with-photo" not in header_classes:
+            header_classes.append("with-photo")
+            header["class"] = header_classes
+
+        header_main = soup.new_tag("div")
+        header_main["class"] = ["header-main"]
+
+        for child in list(header.contents):
+            header_main.append(child.extract())
+
+        header.append(header_main)
+
+        photo = soup.new_tag("img")
+        photo["class"] = ["profile-photo"]
+        photo["src"] = photo_src
+        photo["alt"] = "Profile photo"
+        header.append(photo)
+        return str(soup)
+    except Exception as exc:
+        logger.debug("Profile photo injection skipped due to parse error: {}", exc)
+        return header_html
+
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -128,6 +262,70 @@ class LLMResumer:
             )
         )
         self.strings = strings
+        self.target_resume_language = "en"
+
+    @staticmethod
+    def _normalize_language_code(language_code: str | None) -> str:
+        if not language_code:
+            return "en"
+
+        normalized = str(language_code).strip().lower()
+        if normalized.startswith(("zh", "cn", "chinese", "中文")):
+            return "zh"
+        return "en"
+
+    def _get_target_resume_language(self) -> str:
+        return self._normalize_language_code(getattr(self, "target_resume_language", "en"))
+
+    def _localize_resume_html_if_needed(self, resume_html: str) -> str:
+        """
+        Localize full resume HTML according to target language.
+        For Chinese target, force Simplified Chinese output while preserving proper nouns/brands/links.
+        """
+        if not isinstance(resume_html, str) or not resume_html.strip():
+            return resume_html
+
+        if self._get_target_resume_language() != "zh":
+            return resume_html
+
+        localization_prompt = self._preprocess_template_string(
+            """
+            You are a professional resume localization editor.
+            Rewrite the user-visible text in the HTML resume into Simplified Chinese.
+
+            Mandatory constraints:
+            - Keep ALL HTML tags/attributes/id/class/style unchanged.
+            - Keep URLs, emails, phone numbers, and date formats unchanged.
+            - Keep proper nouns in original form when they are brands, products, platforms, tools, libraries, certificates, or company names.
+              Examples that must stay as-is when present: GitLab, LinkedIn, GitHub, CMake, Jenkins, GoogleTest, CI/CD.
+            - Keep foreign company names in their original script/casing.
+            - Keep acronyms and technical tokens unchanged when translation would reduce clarity.
+            - Do NOT add or remove sections, bullets, or links.
+            - Return HTML only, no markdown fences, no explanations.
+
+            HTML:
+            {resume_html}
+            """
+        )
+        prompt = ChatPromptTemplate.from_template(localization_prompt)
+        chain = prompt | self.llm_cheap | StrOutputParser()
+
+        try:
+            localized_html = (chain.invoke({"resume_html": resume_html}) or "").strip()
+            localized_html = localized_html.replace("```html", "").replace("```", "").strip()
+
+            if not localized_html:
+                logger.warning("[LOC] Empty localization output. Falling back to original HTML.")
+                return resume_html
+            if "<body" not in localized_html.lower():
+                logger.warning("[LOC] Localization output is not a full body block. Falling back to original HTML.")
+                return resume_html
+
+            logger.info("[LOC] Resume localized to Simplified Chinese based on JD language.")
+            return localized_html
+        except Exception as exc:
+            logger.warning("[LOC] Localization step failed, fallback to original HTML: {}", exc)
+            return resume_html
 
     @staticmethod
     def _preprocess_template_string(template: str) -> str:
@@ -542,11 +740,6 @@ class LLMResumer:
                 return self.generate_work_experience_section()
             return ""
 
-        def projects_fn():
-            if self.resume.projects:
-                return self.generate_projects_section()
-            return ""
-
         def achievements_fn():
             if self.resume.achievements:
                 return self.generate_achievements_section()
@@ -564,7 +757,6 @@ class LLMResumer:
             "header": header_fn,
             "education": education_fn,
             "work_experience": work_experience_fn,
-            "projects": projects_fn,
             "achievements": achievements_fn,
             "additional_skills": additional_skills_fn,
         }
@@ -581,14 +773,17 @@ class LLMResumer:
                         results[section] = result
                 except Exception as exc:
                     logger.error(f'{section} raised an exception: {exc}')
+
+        if results.get("header"):
+            results["header"] = _inject_profile_photo_in_header(results["header"])
+
         full_resume = "<body>\n"
         full_resume += f"  {results.get('header', '')}\n"
         full_resume += "  <main>\n"
         full_resume += f"    {results.get('education', '')}\n"
         full_resume += f"    {results.get('work_experience', '')}\n"
-        full_resume += f"    {results.get('projects', '')}\n"
         full_resume += f"    {results.get('achievements', '')}\n"
         full_resume += f"    {results.get('additional_skills', '')}\n"
         full_resume += "  </main>\n"
         full_resume += "</body>"
-        return full_resume
+        return self._localize_resume_html_if_needed(full_resume)

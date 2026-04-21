@@ -18,6 +18,38 @@ import json
 load_dotenv()
 
 
+def _detect_jd_language(jd_text: str) -> str:
+    """
+    Detect JD language with a lightweight mixed-language heuristic.
+    Returns:
+        "zh" for Chinese-dominant JD, otherwise "en".
+    """
+    text = (jd_text or "").strip()
+    if not text:
+        return "en"
+
+    zh_markers = (
+        "岗位职责", "工作职责", "职位描述", "工作内容", "任职要求",
+        "岗位要求", "我们希望", "你将负责", "你将做什么", "加分项",
+        "负责", "要求", "职位", "岗位"
+    )
+    if any(marker in text for marker in zh_markers):
+        return "zh"
+
+    zh_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_chars = len(re.findall(r"[A-Za-z]", text))
+
+    if zh_chars >= 10 and zh_chars >= int(latin_chars * 0.1):
+        return "zh"
+    if zh_chars >= 8 and zh_chars > latin_chars:
+        return "zh"
+    return "en"
+
+
+def _language_label(language_code: str) -> str:
+    return "Simplified Chinese" if language_code == "zh" else "English"
+
+
 class LLMResumeJobDescription(LLMResumer):
     def __init__(self, openai_api_key, strings):
         super().__init__(openai_api_key, strings)
@@ -40,11 +72,26 @@ class LLMResumeJobDescription(LLMResumer):
         if not job_description_text or not str(job_description_text).strip():
             raise ValueError("Job description text is empty.")
 
+        detected_language = _detect_jd_language(str(job_description_text))
+        self.target_resume_language = detected_language
+
+        output_language_rule = (
+            "Output language must be Simplified Chinese. Keep proper nouns, company names, brands/tools, links, emails, and acronyms in their original form."
+            if detected_language == "zh"
+            else
+            "Output language must be English. Keep proper nouns, company names, brands/tools, links, emails, and acronyms in their original form."
+        )
+
         # 构建链
-        prompt = ChatPromptTemplate.from_template(self.strings.summarize_prompt_template)
+        prompt = ChatPromptTemplate.from_template(
+            self.strings.summarize_prompt_template
+            + "\n\nOutput language requirement:\n"
+            + output_language_rule
+        )
         chain = prompt | self.llm_cheap | StrOutputParser()
 
         logger.info(f"[JD] summarize_prompt_template exists? {hasattr(self.strings, 'summarize_prompt_template')}")
+        logger.info(f"[JD] detected language: {detected_language} ({_language_label(detected_language)})")
         logger.debug(f"[JD] summarize_prompt_template preview:\n{getattr(self.strings, 'summarize_prompt_template', '')[:300]}")
 
         summary = chain.invoke({"text": job_description_text}) or ""
@@ -129,6 +176,15 @@ class LLMResumeJobDescription(LLMResumer):
             additional_skills_prompt_template = self._preprocess_template_string(
                 self.strings.prompt_additional_skills
             )
+            additional_skills_prompt_template += self._preprocess_template_string(
+                """
+
+                Output language policy:
+                - Write user-visible text in {output_language}.
+                - Keep company names, platform names, brand/tool names, links, emails, and acronyms unchanged.
+                - Do not translate tokens like GitLab, LinkedIn, GitHub, CI/CD, CMake unless already localized in source.
+                """
+            )
 
             # ---------- 2) 收集技能（多源兜底） ----------
             skills_set = set()
@@ -193,6 +249,7 @@ class LLMResumeJobDescription(LLMResumer):
             # ---------- 5) 组链并调用 ----------
             prompt = ChatPromptTemplate.from_template(additional_skills_prompt_template)
             chain = prompt | self.llm_strong if hasattr(self, "llm_strong") else (prompt | self.llm_cheap)
+            output_language = _language_label(self._normalize_language_code(getattr(self, "target_resume_language", "en")))
 
             # ---------- [B0] Prompt与入参探针 ----------
             tpl_preview = (additional_skills_prompt_template[:220] if additional_skills_prompt_template else None)
@@ -203,7 +260,8 @@ class LLMResumeJobDescription(LLMResumer):
                 "languages": languages,
                 "interests": interests,
                 "skills": skills_list,
-                "job_description": jd_input
+                "job_description": jd_input,
+                "output_language": output_language,
             })
 
             # ---------- [B1] LLM原样输出探针 ----------
@@ -281,6 +339,11 @@ class LLMResumeJobDescription(LLMResumer):
         base_prompt = r"""
         You are a senior HR/ATS resume editor. Transform the user’s work experience so it strongly aligns with the target Job **Analysis** (below). Aim for ≥80% theme coverage and high keyword resonance while keeping content plausible and professional.
 
+        ### OUTPUT LANGUAGE
+        - Write all section headings and narrative text in: {output_language}.
+        - Preserve original spelling/script for company names, brand/tool names, product names, links, emails, and acronyms.
+        - Do not translate terms like GitLab, LinkedIn, GitHub, CI/CD, CMake unless they are already localized in source.
+
         ### GUIDING PRINCIPLES
         - Alignment first: emphasize responsibilities, skills, methods, and tools that best match the JD themes.
         - Reasonable augmentation: you may infer and expand on typical duties and outcomes for similar roles when the context clearly supports them.
@@ -327,9 +390,11 @@ class LLMResumeJobDescription(LLMResumer):
 
 
         prompt_obj = ChatPromptTemplate.from_template(base_prompt)
+        output_language = _language_label(self._normalize_language_code(getattr(self, "target_resume_language", "en")))
         inputs = {
             "jd_analysis": jd_text[:8000],
             "source_experience": source_text[:8000],
+            "output_language": output_language,
         }
 
         # ---------- 3) 調用模型（單次） ----------
@@ -350,10 +415,6 @@ class LLMResumeJobDescription(LLMResumer):
 
         logger.info("[RESULT][WORK-EXP][EDIT-ONLY, no coverage] === HTML START ===\n{}\n=== HTML END ===", html)
         return html
-
-
-
-
 
 
 

@@ -191,7 +191,9 @@ class LLMParser:
         drop_markers = [
             "that's you", "that´s you", "your responsibilities", "responsibilities",
             "what you will do", "what you'll do", "requirements", "qualifications",
-            "must have", "nice to have", "about you"
+            "must have", "nice to have", "about you",
+            "岗位职责", "工作职责", "职位职责", "工作内容", "主要职责", "职责描述",
+            "任职要求", "职位要求", "岗位要求", "资格要求", "加分项", "你将负责", "我们希望你"
         ]
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
         kept = []
@@ -393,24 +395,34 @@ DESCRIPTION:
                 self._trimmed_html,
                 header_keywords=[
                     "your responsibilities","responsibilities","what you will do","what you'll do",
-                    "tasks","role responsibilities","about the role"
+                    "tasks","role responsibilities","about the role",
+                    "岗位职责","工作职责","职位职责","工作内容","主要职责","职责描述","你将负责","你将做什么"
                 ],
-                stop_keywords=["benefits","what we offer","perks","why us","about us","company","culture"],
+                stop_keywords=[
+                    "benefits","what we offer","perks","why us","about us","company","culture",
+                    "福利","我们提供","薪酬福利","关于我们","公司介绍","企业文化","团队介绍"
+                ],
                 other_section_headers=[
                     "that's you", "that´s you", "requirements","what you bring",
-                    "what we are looking for","qualifications","skills","must have","nice to have","about you"
+                    "what we are looking for","qualifications","skills","must have","nice to have","about you",
+                    "任职要求","职位要求","岗位要求","资格要求","我们希望你","你需要具备","加分项","你是谁"
                 ]
             )
             reqs = self._extract_section_from_html(
                 self._trimmed_html,
                 header_keywords=[
                     "that's you","that´s you","requirements","what you bring","what we are looking for",
-                    "qualifications","skills","must have","nice to have","about you"
+                    "qualifications","skills","must have","nice to have","about you",
+                    "任职要求","职位要求","岗位要求","资格要求","我们希望你","你需要具备","加分项","你是谁"
                 ],
-                stop_keywords=["benefits","what we offer","perks","why us","about us","company","culture"],
+                stop_keywords=[
+                    "benefits","what we offer","perks","why us","about us","company","culture",
+                    "福利","我们提供","薪酬福利","关于我们","公司介绍","企业文化","团队介绍"
+                ],
                 other_section_headers=[
                     "your responsibilities","responsibilities","what you will do","what you'll do",
-                    "tasks","role responsibilities","about the role"
+                    "tasks","role responsibilities","about the role",
+                    "岗位职责","工作职责","职位职责","工作内容","主要职责","职责描述","你将负责","你将做什么"
                 ]
             )
 
@@ -582,6 +594,4 @@ TEXT:
         )
         print(text)
         logger.info(text)
-
-
 

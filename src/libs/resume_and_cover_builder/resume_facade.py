@@ -51,13 +51,39 @@ class ResumeFacade:
         ]
         return inquirer.prompt(questions)["text"]
 
-    def link_to_job(self, job_url):
-        self.driver.get(job_url)
-        self.driver.implicitly_wait(10)
+    @staticmethod
+    def _is_job_description_usable(job_description: str) -> bool:
+        text = (job_description or "").strip()
+        if not text:
+            return False
+
+        blocked_markers = [
+            "正在加载中",
+            "loading",
+            "请完成验证",
+            "验证码",
+            "登录后",
+            "访问受限",
+            "missing or incomplete",
+            "please provide the full job description",
+        ]
+        lower_text = text.lower()
+        if any(marker in text for marker in blocked_markers if any("\u4e00" <= c <= "\u9fff" for c in marker)):
+            return False
+        if any(marker in lower_text for marker in blocked_markers if not any("\u4e00" <= c <= "\u9fff" for c in marker)):
+            return False
+
+        # Too short usually means page wasn't loaded or anti-bot wall was scraped.
+        if len(text) < 50:
+            return False
+
+        return True
+
+    def _extract_job_fields_from_current_page(self, job_url: str) -> None:
         body_element = self.driver.find_element("tag name", "body")
-        body_element = body_element.get_attribute("outerHTML")
+        body_html = body_element.get_attribute("outerHTML")
         self.llm_job_parser = LLMParser(openai_api_key=global_config.API_KEY)
-        self.llm_job_parser.set_body_html(body_element)
+        self.llm_job_parser.set_body_html(body_html)
 
         self.job = Job()
         self.job.role = self.llm_job_parser.extract_role()
@@ -65,7 +91,37 @@ class ResumeFacade:
         self.job.description = self.llm_job_parser.extract_job_description()
         self.job.location = self.llm_job_parser.extract_location()
         self.job.link = job_url
+
+    def link_to_job(self, job_url):
+        self.driver.get(job_url)
+        self.driver.implicitly_wait(10)
         logger.info(f"Extracting job details from URL: {job_url}")
+        self._extract_job_fields_from_current_page(job_url)
+
+        if self._is_job_description_usable(self.job.description):
+            return
+
+        logger.warning(
+            "Job description looks incomplete (likely anti-bot page, loading screen, or login wall). "
+            "Please complete verification/login in browser, then press Enter to retry extraction."
+        )
+        print(
+            "\n[Notice] Unable to read full JD content from current page.\n"
+            "Please complete login/verification in the opened browser window,\n"
+            "then return here and press Enter to retry extraction."
+        )
+        try:
+            input()
+        except EOFError:
+            logger.warning("No interactive stdin detected; retrying extraction once without manual confirmation.")
+
+        self._extract_job_fields_from_current_page(job_url)
+
+        if not self._is_job_description_usable(self.job.description):
+            raise RuntimeError(
+                "Could not extract complete job description from this URL. "
+                "The page may require login/captcha or block automated access."
+            )
 
     def create_resume_pdf_job_tailored(self) -> tuple[bytes, str]:
         style_path = self.style_manager.get_style_path()

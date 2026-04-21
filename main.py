@@ -80,6 +80,8 @@ class FileManager:
 
         output_folder = app_data_folder / "output"
         output_folder.mkdir(exist_ok=True)
+        photo_folder = app_data_folder / "photo"
+        photo_folder.mkdir(exist_ok=True)
 
         return (
             app_data_folder / SECRETS_YAML,
@@ -166,39 +168,28 @@ def _load_plain_text_resume(parameters: dict) -> str:
         return file.read()
 
 
-def _select_style(style_manager: StyleManager) -> None:
+def _set_default_style(style_manager: StyleManager) -> None:
     available_styles = style_manager.get_styles()
     if not available_styles:
-        logger.warning("No styles available. Proceeding without style selection.")
+        raise ValueError("No resume styles available. Please add at least one style file.")
+
+    preferred_style = "Modern Grey"
+    if preferred_style in available_styles:
+        style_manager.set_selected_style(preferred_style)
+        logger.info(f"Using default style: {preferred_style}")
         return
 
-    choices = style_manager.format_choices(available_styles)
-    questions = [
-        inquirer.List(
-            "style",
-            message="Select a style for the resume:",
-            choices=choices,
-        )
-    ]
-    style_answer = inquirer.prompt(questions)
-    if not style_answer or "style" not in style_answer:
-        logger.warning("No style selected. Proceeding with default style.")
-        return
-
-    selected_choice = style_answer["style"]
-    for style_name in available_styles.keys():
-        if selected_choice.startswith(style_name):
-            style_manager.set_selected_style(style_name)
-            logger.info(f"Selected style: {style_name}")
-            return
-
-    logger.warning("Style selection did not match known styles.")
+    selected_style = next(iter(available_styles.keys()))
+    style_manager.set_selected_style(selected_style)
+    logger.warning(
+        f"Preferred style '{preferred_style}' not found. Falling back to available style: {selected_style}"
+    )
 
 
 def _build_resume_facade(parameters: dict, llm_api_key: str) -> ResumeFacade:
     plain_text_resume = _load_plain_text_resume(parameters)
     style_manager = StyleManager()
-    _select_style(style_manager)
+    _set_default_style(style_manager)
     resume_generator = ResumeGenerator()
     resume_object = Resume(plain_text_resume)
     resume_generator.set_resume_object(resume_object)

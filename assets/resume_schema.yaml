@@ -120,4 +120,3 @@ legal_authorization:
     legally_allowed_to_work_in_us: {type: string, enum: [Yes, No]}
     requires_eu_sponsorship: {type: string, enum: [Yes, No]}
   required: [eu_work_authorization, us_work_authorization, requires_us_visa, requires_us_sponsorship, requires_eu_visa, legally_allowed_to_work_in_eu, legally_allowed_to_work_in_us, requires_eu_sponsorship]
-
