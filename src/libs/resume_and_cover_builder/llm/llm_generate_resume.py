@@ -277,6 +277,44 @@ class LLMResumer:
     def _get_target_resume_language(self) -> str:
         return self._normalize_language_code(getattr(self, "target_resume_language", "en"))
 
+    @staticmethod
+    def _strip_inline_image_data_uris(resume_html: str) -> tuple[str, dict[str, str]]:
+        """
+        Replace huge inline image data URIs with placeholders before sending HTML to the LLM.
+        This keeps localization requests small and prevents rate-limit errors from oversized payloads.
+        """
+        if not isinstance(resume_html, str) or not resume_html.strip():
+            return resume_html, {}
+
+        try:
+            soup = BeautifulSoup(resume_html, "html.parser")
+            placeholder_to_src: dict[str, str] = {}
+            idx = 0
+            for img in soup.find_all("img"):
+                src = img.get("src")
+                if isinstance(src, str) and src.startswith("data:image/") and ";base64," in src:
+                    placeholder = f"__JOBAI_IMG_DATA_URI_{idx}__"
+                    placeholder_to_src[placeholder] = src
+                    img["src"] = placeholder
+                    idx += 1
+            return str(soup), placeholder_to_src
+        except Exception as exc:
+            logger.debug("[LOC] Failed to strip inline image data URIs: {}", exc)
+            return resume_html, {}
+
+    @staticmethod
+    def _restore_inline_image_data_uris(localized_html: str, placeholder_to_src: dict[str, str]) -> str:
+        """Restore inline image data URIs after localization."""
+        if not isinstance(localized_html, str) or not localized_html.strip():
+            return localized_html
+        if not placeholder_to_src:
+            return localized_html
+
+        restored = localized_html
+        for placeholder, src in placeholder_to_src.items():
+            restored = restored.replace(placeholder, src)
+        return restored
+
     def _localize_resume_html_if_needed(self, resume_html: str) -> str:
         """
         Localize full resume HTML according to target language.
@@ -311,7 +349,11 @@ class LLMResumer:
         chain = prompt | self.llm_cheap | StrOutputParser()
 
         try:
-            localized_html = (chain.invoke({"resume_html": resume_html}) or "").strip()
+            llm_input_html, image_placeholders = self._strip_inline_image_data_uris(resume_html)
+            if image_placeholders:
+                logger.info("[LOC] Stripped {} inline image data URI(s) before localization.", len(image_placeholders))
+
+            localized_html = (chain.invoke({"resume_html": llm_input_html}) or "").strip()
             localized_html = localized_html.replace("```html", "").replace("```", "").strip()
 
             if not localized_html:
@@ -319,6 +361,12 @@ class LLMResumer:
                 return resume_html
             if "<body" not in localized_html.lower():
                 logger.warning("[LOC] Localization output is not a full body block. Falling back to original HTML.")
+                return resume_html
+
+            localized_html = self._restore_inline_image_data_uris(localized_html, image_placeholders)
+            unresolved_placeholders = [p for p in image_placeholders if p in localized_html]
+            if unresolved_placeholders:
+                logger.warning("[LOC] Some image placeholders were not restored. Falling back to original HTML.")
                 return resume_html
 
             logger.info("[LOC] Resume localized to Simplified Chinese based on JD language.")

@@ -2,8 +2,12 @@
 This module contains the FacadeManager class, which is responsible for managing the interaction between the user and other components of the application.
 """
 import hashlib
+import re
+import time
+import sys
 import inquirer
 from pathlib import Path
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -52,32 +56,240 @@ class ResumeFacade:
         return inquirer.prompt(questions)["text"]
 
     @staticmethod
-    def _is_job_description_usable(job_description: str) -> bool:
-        text = (job_description or "").strip()
+    def _flush_stdin_buffer() -> None:
+        """
+        Clear pending stdin bytes so the next input() truly waits for user action.
+        This avoids inquirer/newline leftovers auto-skipping confirmation prompts.
+        """
+        if not sys.stdin or not sys.stdin.isatty():
+            return
+        try:
+            import termios
+
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        except Exception:
+            # Not all platforms/terminals support tcflush; best-effort only.
+            return
+
+    @classmethod
+    def _wait_for_enter(cls, message: str, *, flush_buffer: bool = True) -> bool:
+        if message:
+            print(message)
+        if flush_buffer:
+            cls._flush_stdin_buffer()
+        try:
+            input()
+            return True
+        except EOFError:
+            return False
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "")).strip()
+
+    @staticmethod
+    def _normalize_job_url(job_url: str) -> str:
+        url = (job_url or "").strip().strip("\"").strip("'")
+        if not url:
+            raise ValueError("Job URL is required.")
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://", url):
+            url = f"https://{url.lstrip('/')}"
+        return url
+
+    @staticmethod
+    def _is_boss_url(job_url: str) -> bool:
+        if not job_url:
+            return False
+        try:
+            host = (urlparse(job_url).netloc or "").lower()
+        except Exception:
+            host = str(job_url).lower()
+        return "zhipin.com" in host
+
+    @classmethod
+    def _contains_blocked_page_markers(cls, text: str) -> bool:
+        normalized = cls._normalize_text(text)
+        if not normalized:
+            return True
+
+        lower_text = normalized.lower()
+        blocked_markers = [
+            "正在加载中",
+            "请完成验证",
+            "请先完成验证",
+            "验证码",
+            "访问受限",
+            "登录后查看",
+            "登录后可见",
+            "请先登录",
+            "security check",
+            "verification required",
+            "zusätzliche verifizierung erforderlich",
+            "zusatzliche verifizierung erforderlich",
+            "verification successful. waiting for",
+            "waiting for",
+            "captcha",
+            "access denied",
+            "sign in to continue",
+            "sign in to view",
+            "please enable javascript",
+            "loading...",
+            "loading…",
+        ]
+        return any(marker.lower() in lower_text for marker in blocked_markers)
+
+    @classmethod
+    def _looks_like_llm_placeholder(cls, text: str) -> bool:
+        normalized = cls._normalize_text(text).lower()
+        if not normalized:
+            return True
+
+        placeholder_markers = [
+            "no job description information has been provided",
+            "please provide the job description",
+            "please provide the full job description",
+            "so i can conduct a thorough analysis",
+            "outline the key skills and requirements",
+            "the provided content does not include a complete job description",
+            "未提供职位描述",
+            "请提供职位描述",
+            "无法根据当前信息提取职位描述",
+        ]
+        return any(marker in normalized for marker in placeholder_markers)
+
+    @classmethod
+    def _is_job_description_usable(cls, job_description: str) -> bool:
+        text = cls._normalize_text(job_description)
         if not text:
             return False
 
-        blocked_markers = [
-            "正在加载中",
-            "loading",
-            "请完成验证",
-            "验证码",
-            "登录后",
-            "访问受限",
-            "missing or incomplete",
-            "please provide the full job description",
-        ]
-        lower_text = text.lower()
-        if any(marker in text for marker in blocked_markers if any("\u4e00" <= c <= "\u9fff" for c in marker)):
+        if cls._contains_blocked_page_markers(text):
             return False
-        if any(marker in lower_text for marker in blocked_markers if not any("\u4e00" <= c <= "\u9fff" for c in marker)):
+        if cls._looks_like_llm_placeholder(text):
             return False
 
         # Too short usually means page wasn't loaded or anti-bot wall was scraped.
         if len(text) < 50:
             return False
 
+        # Structured bullet outputs are valid JD extracts too.
+        lines = [ln.strip() for ln in (job_description or "").splitlines() if ln.strip()]
+        bullet_like_pattern = re.compile(r"^(?:[•\-\–\*]|[0-9]+[\.\)]|[①②③④⑤⑥⑦⑧⑨⑩]|[一二三四五六七八九十]+[、\.])")
+        bullet_count = sum(1 for ln in lines if bullet_like_pattern.match(ln))
+        if bullet_count >= 3 and len(text) >= 80:
+            return True
+
+        lower_text = text.lower()
+        zh_signals = ["岗位", "职责", "任职", "要求", "经验", "技能", "职位", "工作内容", "你将负责", "负责"]
+        en_signals = ["responsibil", "requirement", "qualification", "experience", "skills", "about the role"]
+        de_signals = [
+            "aufgaben", "verantwort", "anforderung", "qualifikation",
+            "kenntnisse", "erfahrung", "fähigkeiten", "voraussetzung",
+            "stellenbeschreibung", "was wir bieten",
+        ]
+        if (
+            not any(signal in text for signal in zh_signals)
+            and not any(signal in lower_text for signal in en_signals)
+            and not any(signal in lower_text for signal in de_signals)
+        ):
+            # Generic structural fallback for valid extracted JD content
+            # (for cases where bullets/paragraphs do not include our language keyword sets).
+            if len(text) < 160 or len(lines) < 4:
+                return False
+            if not any(token in text for token in ("•", ":", "：", ";", "；")):
+                return False
+
         return True
+
+    def _wait_for_readable_page(self, timeout_seconds: int = 20) -> None:
+        deadline = time.time() + max(1, timeout_seconds)
+        current_url = ""
+        try:
+            current_url = self.driver.current_url
+        except Exception:
+            current_url = ""
+
+        boss_markers = ("职位描述", "岗位职责", "任职要求", "工作内容", "职位要求", "福利待遇")
+        while time.time() < deadline:
+            try:
+                page_text = self.driver.find_element("tag name", "body").text
+            except Exception:
+                time.sleep(0.8)
+                continue
+
+            normalized_page_text = self._normalize_text(page_text)
+            if len(normalized_page_text) >= 120 and not self._contains_blocked_page_markers(normalized_page_text):
+                if self._is_boss_url(current_url):
+                    if any(marker in normalized_page_text for marker in boss_markers):
+                        return
+                else:
+                    return
+            time.sleep(1.0)
+
+    def _prompt_boss_manual_login(self, job_url: str) -> None:
+        if not self._is_boss_url(job_url):
+            return
+
+        print(
+            "\n[BOSS Login Step]\n"
+            "请先在浏览器中完成 BOSS 登录/验证。\n"
+            "完成后回到终端按 Enter；如果提示仍在登录页，请继续登录后再按 Enter。"
+        )
+
+        while True:
+            confirmed = self._wait_for_enter("按 Enter 继续...")
+            if not confirmed:
+                logger.warning("No interactive stdin detected; continuing without manual confirmation for BOSS login step.")
+                return
+
+            try:
+                current_url = (self.driver.current_url or "").lower()
+            except Exception:
+                current_url = ""
+
+            if "job_detail" in current_url:
+                return
+            if "login" in current_url or "verify" in current_url:
+                print("检测到你还在登录/验证页面，请先完成后再按 Enter。")
+                continue
+
+            # Some BOSS flows bounce to homepage after login; reopen the target URL once.
+            try:
+                logger.info("Reopening target BOSS job URL after manual login step.")
+                self.driver.get(job_url)
+                time.sleep(1.2)
+                reopened_url = (self.driver.current_url or "").lower()
+                if "job_detail" in reopened_url:
+                    return
+                if "login" in reopened_url or "verify" in reopened_url:
+                    print("跳回登录/验证页了，请完成验证后再按 Enter。")
+                    continue
+            except Exception:
+                logger.warning("Could not verify/reopen current BOSS URL after manual login step.")
+            return
+
+    @staticmethod
+    def _collect_manual_job_description() -> str:
+        print(
+            "\n[Fallback] 自动抓取仍失败。你可以直接粘贴 JD 文本。\n"
+            "粘贴完成后，输入单独一行 END 结束。\n"
+            "如果不想手动粘贴，直接按 Enter 跳过。"
+        )
+
+        lines: list[str] = []
+        while True:
+            try:
+                line = input()
+            except EOFError:
+                break
+
+            if not lines and not line.strip():
+                return ""
+            if line.strip().upper() == "END":
+                break
+            lines.append(line)
+
+        return "\n".join(lines).strip()
 
     def _extract_job_fields_from_current_page(self, job_url: str) -> None:
         body_element = self.driver.find_element("tag name", "body")
@@ -93,45 +305,73 @@ class ResumeFacade:
         self.job.link = job_url
 
     def link_to_job(self, job_url):
-        self.driver.get(job_url)
+        normalized_job_url = self._normalize_job_url(job_url)
+        try:
+            self.driver.get(normalized_job_url)
+        except Exception as e:
+            logger.exception(f"Failed to open job URL: {normalized_job_url} ({e})")
+            raise RuntimeError(
+                "无法打开职位链接。请确认链接完整有效，且以 https:// 开头后重试。"
+            ) from e
+
         self.driver.implicitly_wait(10)
-        logger.info(f"Extracting job details from URL: {job_url}")
-        self._extract_job_fields_from_current_page(job_url)
+        self._prompt_boss_manual_login(normalized_job_url)
+        initial_wait = 40 if self._is_boss_url(normalized_job_url) else 20
+        self._wait_for_readable_page(timeout_seconds=initial_wait)
+        logger.info(f"Extracting job details from URL: {normalized_job_url}")
+        self._extract_job_fields_from_current_page(normalized_job_url)
 
         if self._is_job_description_usable(self.job.description):
             return
 
         logger.warning(
+            "Extracted JD still looks unusable after first pass. Preview: {}",
+            self._normalize_text(self.job.description)[:240],
+        )
+        logger.warning(
             "Job description looks incomplete (likely anti-bot page, loading screen, or login wall). "
             "Please complete verification/login in browser, then press Enter to retry extraction."
         )
-        print(
+        confirmed = self._wait_for_enter(
             "\n[Notice] Unable to read full JD content from current page.\n"
             "Please complete login/verification in the opened browser window,\n"
-            "then return here and press Enter to retry extraction."
+            "then return here and press Enter to retry extraction.\n"
+            "按 Enter 重试..."
         )
-        try:
-            input()
-        except EOFError:
+        if not confirmed:
             logger.warning("No interactive stdin detected; retrying extraction once without manual confirmation.")
 
-        self._extract_job_fields_from_current_page(job_url)
+        retry_wait = 45 if self._is_boss_url(normalized_job_url) else 25
+        self._wait_for_readable_page(timeout_seconds=retry_wait)
+        self._extract_job_fields_from_current_page(normalized_job_url)
 
         if not self._is_job_description_usable(self.job.description):
+            manual_jd = self._collect_manual_job_description()
+            if manual_jd:
+                self.job.description = manual_jd
+                logger.info("Using manually provided job description fallback.")
+                return
+
             raise RuntimeError(
                 "Could not extract complete job description from this URL. "
-                "The page may require login/captcha or block automated access."
+                "The page may require login/captcha or block automated access. "
+                "You can rerun and paste JD text when prompted."
             )
 
-    def create_resume_pdf_job_tailored(self) -> tuple[bytes, str]:
+    def create_resume_pdf_job_tailored(self, enable_manual_review: bool = True) -> tuple[bytes, str]:
         style_path = self.style_manager.get_style_path()
         if style_path is None:
             raise ValueError("You must choose a style before generating the PDF.")
+        if not self._is_job_description_usable(getattr(self.job, "description", "")):
+            raise RuntimeError(
+                "Job description is still incomplete/invalid. "
+                "Please finish login/verification on the job page and retry."
+            )
 
         html_resume = self.resume_generator.create_resume_job_description_text(style_path, self.job.description)
         suggested_name = hashlib.md5(self.job.link.encode()).hexdigest()[:10]
 
-        result = HTML_to_PDF(html_resume, self.driver, enable_manual_review=True)
+        result = HTML_to_PDF(html_resume, self.driver, enable_manual_review=enable_manual_review)
         self._safe_quit_driver()
         return result, suggested_name
 
@@ -149,6 +389,11 @@ class ResumeFacade:
         style_path = self.style_manager.get_style_path()
         if style_path is None:
             raise ValueError("You must choose a style before generating the PDF.")
+        if not self._is_job_description_usable(getattr(self.job, "description", "")):
+            raise RuntimeError(
+                "Job description is still incomplete/invalid. "
+                "Please finish login/verification on the job page and retry."
+            )
 
         cover_letter_html = self.resume_generator.create_cover_letter_job_description(
             style_path,

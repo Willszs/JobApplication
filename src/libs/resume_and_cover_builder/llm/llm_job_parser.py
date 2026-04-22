@@ -2,6 +2,8 @@ import tempfile
 import textwrap
 import time
 import re  # For email validation
+import json
+import html as html_lib
 from src.libs.resume_and_cover_builder.utils import LoggerChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.output_parsers import JsonOutputParser  # 严格 JSON 解析
@@ -69,6 +71,14 @@ class LLMParser:
                 "section.show-more-less-html",
                 "div.jobs-description__content",
                 "div.jobs-box__html-content",
+                # Indeed 常见容器
+                "div#jobDescriptionText",
+                "div.jobsearch-JobComponent-description",
+                "div[data-testid='jobsearch-JobComponent-description']",
+                # 通用主内容
+                "main",
+                "article",
+                "div[role='main']",
                 # 次级容器（仍以正文为主）
                 "div.jobs-details__main-content",
                 "section.core-section-container",
@@ -82,6 +92,74 @@ class LLMParser:
         except Exception as e:
             logger.warning(f"Domain-specific trim failed; fallback to raw HTML. Error: {e}")
             return raw_html
+
+    def _extract_jobposting_from_jsonld(self, raw_html: str) -> str:
+        """
+        从页面 JSON-LD 中抽取 JobPosting。Indeed 等站点常把完整 JD 放在这里。
+        """
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(raw_html, "html.parser")
+            scripts = soup.find_all("script", attrs={"type": "application/ld+json"})
+            if not scripts:
+                return ""
+
+            def _iter_nodes(node):
+                if isinstance(node, dict):
+                    yield node
+                    for v in node.values():
+                        yield from _iter_nodes(v)
+                elif isinstance(node, list):
+                    for item in node:
+                        yield from _iter_nodes(item)
+
+            def _extract_location(loc_obj):
+                if not isinstance(loc_obj, dict):
+                    return ""
+                addr = loc_obj.get("address", {}) if isinstance(loc_obj.get("address"), dict) else {}
+                parts = [
+                    addr.get("addressLocality", ""),
+                    addr.get("addressRegion", ""),
+                    addr.get("addressCountry", ""),
+                ]
+                return ", ".join([p for p in parts if p])
+
+            for sc in scripts:
+                raw = (sc.string or sc.get_text() or "").strip()
+                if not raw:
+                    continue
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+
+                for node in _iter_nodes(data):
+                    if not isinstance(node, dict):
+                        continue
+                    ntype = str(node.get("@type", "")).lower()
+                    if "jobposting" not in ntype:
+                        continue
+
+                    title = str(node.get("title", "") or "").strip()
+                    org = node.get("hiringOrganization", {})
+                    company = (org.get("name", "") if isinstance(org, dict) else "") or ""
+                    location = _extract_location(node.get("jobLocation", {}))
+                    desc_raw = str(node.get("description", "") or "")
+                    desc_text = self._visible_text_clean(desc_raw) if desc_raw else ""
+
+                    merged = (
+                        f"Job Title: {title}\n"
+                        f"Company: {company}\n"
+                        f"Location: {location}\n\n"
+                        f"Description:\n{desc_text}"
+                    ).strip()
+                    if len(merged) >= 120:
+                        logger.debug("JobPosting JSON-LD extracted successfully.")
+                        return merged
+            return ""
+        except Exception as e:
+            logger.warning(f"JSON-LD JobPosting extraction failed: {e}")
+            return ""
 
     def _visible_text_clean(self, html: str) -> str:
         """
@@ -100,6 +178,60 @@ class LLMParser:
 
         text = soup.get_text(separator="\n", strip=True)
         return text
+
+    def _sanitize_text_for_llm(self, text: str, max_chars: int = 18000) -> str:
+        """
+        强制将输入压缩为可控大小，避免把整页脚本/导航噪声送给 LLM 导致 429。
+        """
+        if not text:
+            return ""
+
+        text = html_lib.unescape(text)
+        # 防御性去标签（即使上游清洗失败，也尽量还原成纯文本）
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = text.strip()
+
+        if len(text) <= max_chars:
+            return text
+
+        keywords = [
+            "responsibil", "requirement", "qualification", "experience", "skills",
+            "key responsibilities", "knowledge", "what we offer", "benefits",
+            "岗位职责", "工作职责", "职位描述", "任职要求", "技能要求", "加分项",
+            "aufgaben", "anforderungen", "qualifikation", "kenntnisse", "voraussetzungen",
+        ]
+
+        segments = []
+        # 保留开头（通常有职位名、公司、摘要）
+        segments.append(text[:4000])
+        for kw in keywords:
+            for m in re.finditer(re.escape(kw), text, flags=re.IGNORECASE):
+                start = max(0, m.start() - 1200)
+                end = min(len(text), m.end() + 2600)
+                segments.append(text[start:end])
+                if len(segments) >= 10:
+                    break
+            if len(segments) >= 10:
+                break
+        # 再保留结尾（常见“requirements/offer”落在后半段）
+        segments.append(text[-3000:])
+
+        compact = []
+        seen = set()
+        for seg in segments:
+            s = seg.strip()
+            if not s:
+                continue
+            key = s[:200]
+            if key in seen:
+                continue
+            seen.add(key)
+            compact.append(s)
+
+        merged = "\n\n".join(compact).strip()
+        return merged[:max_chars]
 
     def _extract_section_from_html(
         self,
@@ -222,27 +354,35 @@ class LLMParser:
         self._trimmed_html = trimmed_html  # 保存供分节抽取
         logger.debug("Domain-specific trim completed.")
 
-        # B) 清洗得到可见文本（供正则/回退使用）
+        # B) 尝试优先从 JSON-LD JobPosting 获取结构化正文（Indeed 常见）
+        jsonld_job_text = self._extract_jobposting_from_jsonld(body_html)
+
+        # C) 清洗得到可见文本（供正则/回退使用）
         try:
             visible_text = self._visible_text_clean(trimmed_html)
         except Exception as e:
             logger.warning(f"Visible text cleaning failed, fallback to raw HTML text: {e}")
             visible_text = trimmed_html
 
-        # C) 保存全文（清洗后），用于正则/兜底提炼
-        self._full_text = visible_text
-        logger.debug("Full text (cleaned) collected (no truncation).")
+        # D) 合并并强制压缩，确保不会把整页脏 HTML 直接送给 LLM
+        if jsonld_job_text and len(jsonld_job_text) >= 120:
+            merged_text = f"{jsonld_job_text}\n\n{visible_text}"
+        else:
+            merged_text = visible_text
 
-        # D) 构造单一文档供切块与向量化
+        self._full_text = self._sanitize_text_for_llm(merged_text, max_chars=18000)
+        logger.debug(f"Full text (cleaned & compacted) length: {len(self._full_text)}")
+
+        # E) 构造单一文档供切块与向量化
         from langchain_core.documents import Document
-        documents = [Document(page_content=visible_text)]
+        documents = [Document(page_content=self._full_text)]
 
-        # E) 切块
+        # F) 切块
         text_splitter = TokenTextSplitter(chunk_size=900, chunk_overlap=120)
         all_splits = text_splitter.split_documents(documents)
         logger.debug(f"Text split into {len(all_splits)} fragments (no truncation in logs).")
 
-        # F) 向量库
+        # G) 向量库
         try:
             self.vectorstore = FAISS.from_documents(documents=all_splits, embedding=self.llm_embeddings)
             logger.debug("Vectorstore successfully initialized.")
@@ -250,7 +390,7 @@ class LLMParser:
             logger.error(f"Error during vectorstore creation: {e}")
             raise
 
-        # G) 重置缓存
+        # H) 重置缓存
         self._extracted_cache = None
 
     def _retrieve_context(self, query: str, top_k: int = 5) -> str:
@@ -594,4 +734,3 @@ TEXT:
         )
         print(text)
         logger.info(text)
-

@@ -1,5 +1,7 @@
 import base64
 import os
+import re
+import hashlib
 from pathlib import Path
 import traceback
 from typing import Tuple, Dict
@@ -8,6 +10,7 @@ import yaml
 
 from src.libs.resume_and_cover_builder import ResumeFacade, ResumeGenerator, StyleManager
 from src.resume_schemas.resume import Resume
+from src.job import Job
 from src.logging import logger
 from src.utils.chrome_utils import init_browser
 from src.utils.constants import (
@@ -150,6 +153,72 @@ def create_resume_pdf_job_tailored(parameters: dict, llm_api_key: str):
         raise
 
 
+def _prompt_pasted_jd_text() -> str:
+    print(
+        "\n请粘贴中文JD全文（可多行）。\n"
+        "粘贴完成后，输入单独一行 END 结束："
+    )
+    lines: list[str] = []
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+        if line.strip().upper() == "END":
+            break
+        lines.append(line)
+
+    jd_text = "\n".join(lines).strip()
+    if not jd_text:
+        raise ValueError("未收到JD内容，请重新运行后粘贴完整中文JD。")
+    return jd_text
+
+
+def _detect_jd_language_for_menu(jd_text: str) -> str:
+    text = (jd_text or "").strip()
+    if not text:
+        return "en"
+
+    zh_markers = (
+        "岗位职责", "工作职责", "职位描述", "工作内容", "任职要求",
+        "岗位要求", "我们希望", "你将负责", "加分项", "岗位", "职位", "职责", "要求"
+    )
+    if any(marker in text for marker in zh_markers):
+        return "zh"
+
+    zh_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+    latin_chars = len(re.findall(r"[A-Za-z]", text))
+    if zh_chars >= 10 and zh_chars >= int(latin_chars * 0.1):
+        return "zh"
+    if zh_chars >= 8 and zh_chars > latin_chars:
+        return "zh"
+    return "en"
+
+
+def create_resume_pdf_from_pasted_chinese_jd(parameters: dict, llm_api_key: str):
+    """Generate a resume PDF tailored to pasted Chinese JD text."""
+    try:
+        logger.info("Generating a CV from pasted Chinese JD.")
+        jd_text = _prompt_pasted_jd_text()
+        if _detect_jd_language_for_menu(jd_text) != "zh":
+            raise ValueError(
+                "该选项仅支持中文JD。你粘贴的内容看起来不是中文JD，请改用“Generate Resume Tailored for Job Description”。"
+            )
+
+        resume_facade = _build_resume_facade(parameters, llm_api_key)
+        jd_hash = hashlib.md5(jd_text.encode("utf-8")).hexdigest()[:12]
+        resume_facade.job = Job(
+            description=jd_text,
+            link=f"manual_chinese_jd_{jd_hash}",
+        )
+        result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored()
+        output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "resume_tailored_cn_paste.pdf"
+        _write_pdf(output_path, result_base64)
+    except Exception as e:
+        logger.exception(f"An error occurred while creating the CV from pasted Chinese JD: {e}")
+        raise
+
+
 def create_resume_pdf(parameters: dict, llm_api_key: str):
     """Generate a base resume PDF without job tailoring."""
     try:
@@ -186,7 +255,7 @@ def _set_default_style(style_manager: StyleManager) -> None:
     )
 
 
-def _build_resume_facade(parameters: dict, llm_api_key: str) -> ResumeFacade:
+def _build_resume_facade(parameters: dict, llm_api_key: str, *, headless: bool = False) -> ResumeFacade:
     plain_text_resume = _load_plain_text_resume(parameters)
     style_manager = StyleManager()
     _set_default_style(style_manager)
@@ -201,7 +270,7 @@ def _build_resume_facade(parameters: dict, llm_api_key: str) -> ResumeFacade:
         resume_object=resume_object,
         output_path=Path(parameters["outputFileDirectory"]),
     )
-    resume_facade.set_driver(init_browser())
+    resume_facade.set_driver(init_browser(headless=headless))
     return resume_facade
 
 
@@ -248,6 +317,10 @@ def handle_inquiries(selected_action: str, parameters: dict, llm_api_key: str):
                 logger.info("Designing a personalized cover letter to enhance your job application...")
                 create_cover_letter(parameters, llm_api_key)
 
+            if "Paste Chinese JD and Generate Tailored Resume" == selected_action:
+                logger.info("Generating tailored resume from pasted Chinese JD...")
+                create_resume_pdf_from_pasted_chinese_jd(parameters, llm_api_key)
+
         else:
             logger.warning("No actions selected. Nothing to execute.")
     except Exception as e:
@@ -269,6 +342,7 @@ def prompt_user_action() -> str:
                     "Generate Resume",
                     "Generate Resume Tailored for Job Description",
                     "Generate Tailored Cover Letter for Job Description",
+                    "Paste Chinese JD and Generate Tailored Resume",
                 ],
             ),
         ]
