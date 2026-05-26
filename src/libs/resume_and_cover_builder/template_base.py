@@ -213,27 +213,16 @@ The results should be provided in html format, Provide only the html code for th
 prompt_additional_skills_template = """
 - **Template to Use**
 '''
-<section id="skills-languages">
-    <h2>Additional Skills</h2>
-    <div class="two-column">
-      <ul class="compact-list">
-          <li>[Specific Skill or Technology]</li>
-          <li>[Specific Skill or Technology]</li>
-          <li>[Specific Skill or Technology]</li>
-          <li>[Specific Skill or Technology]</li>
-          <li>[Specific Skill or Technology]</li>
-          <li>[Specific Skill or Technology]</li>
-      </ul>
-      <ul class="compact-list">
-          <li>[Specific Skill or Technology]</li>
-          <li>[Specific Skill or Technology]</li>
-          <li>[Specific Skill or Technology]</li>
-          <li>[Specific Skill or Technology]</li>
-          <li>[Specific Skill or Technology]</li>
-          <li>Languages: </li>
-      </ul>
+<section id="skills">
+    <h2>Skills</h2>
+    <div class="skills-inline">
+      <span class="skill-item">[Specific Skill or Technology]</span>
+      <span class="skill-item">[Specific Skill or Technology]</span>
+      <span class="skill-item">[Specific Skill or Technology]</span>
+      <span class="skill-item">[Specific Skill or Technology]</span>
+      <span class="skill-item">Languages: [Language (Level), Language (Level)]</span>
     </div>
 </section>
 '''
-The results should be provided in html format, Provide only the html code for the resume, without any explanations or additional text and also without ```html ```
+Render skills as inline <span class="skill-item"> items inside .skills-inline so they flow one after another and wrap naturally. The results should be provided in html format, Provide only the html code for the resume, without any explanations or additional text and also without ```html ```
 """

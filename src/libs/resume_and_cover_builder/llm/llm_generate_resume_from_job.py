@@ -8,7 +8,7 @@ from loguru import logger
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from src.libs.resume_and_cover_builder.llm.llm_generate_resume import LLMResumer
+from src.libs.resume_and_cover_builder.llm.llm_generate_resume import LLMResumer, _normalize_work_section
 from src.utils.language import detect_jd_language
 
 
@@ -116,26 +116,23 @@ class LLMResumeJobDescription(LLMResumer):
             "job_description": self.job_description_summary or self.job_description
         })
 
-    def generate_additional_skills_section(self) -> str:
+    def generate_additional_skills_section(self, work_experience_html: str = "") -> str:
         """
-        额外技能段生成（带分层调试日志）：
-        [A0]/[A1] 数据探针  → 看源数据/合并后的 skills_list 是否为空
-        [B0]/[B1] 生成探针  → 看 Prompt 模板与 LLM 原样输出是否只剩 Languages
+        Generate Skills from the generated work experience, with resume data as fallback context.
         """
-        import json
         try:
             # ---------- [A0] 源数据快照 ----------
             langs0 = getattr(self.resume, "languages", None)
-            inter0 = getattr(self.resume, "interests", None)
             add0   = getattr(self.resume, "additional_skills", None)
             skills0= getattr(self.resume, "skills", None)
             exp0   = getattr(self.resume, "experience_details", None)
             edu0   = getattr(self.resume, "education_details", None)
+            work_experience_text = self._html_to_visible_text(work_experience_html)
 
             logger.debug(f"[A0] resume.languages={langs0!r}")
-            logger.debug(f"[A0] resume.interests={inter0!r}")
             logger.debug(f"[A0] resume.additional_skills={add0!r}")
             logger.debug(f"[A0] resume.skills={skills0!r}")
+            logger.debug(f"[A0] generated work_experience chars={len(work_experience_text)}")
             if exp0:
                 fields_map = [{k: bool(getattr(exp, k, None)) for k in ("skills_acquired","tools","technologies","keywords")} for exp in exp0]
                 logger.debug(f"[A0] experience_details fields={fields_map}")
@@ -189,13 +186,10 @@ class LLMResumeJobDescription(LLMResumer):
             # 2.5 排序+清洗
             skills_list = sorted({s.strip() for s in skills_set if s and isinstance(s, str)})
 
-            # ---------- 3) 语言/兴趣 统一为列表 ----------
+            # ---------- 3) 语言统一为列表 ----------
             languages = langs0 or []
-            interests = inter0 or []
             if isinstance(languages, str):
                 languages = [languages]
-            if isinstance(interests, str):
-                interests = [interests]
 
             # ---------- 4) JD 文本化 ----------
             jd_input = self.job_description_summary or self.job_description or ""
@@ -211,7 +205,6 @@ class LLMResumeJobDescription(LLMResumer):
             # ---------- [A1] 合并后探针 ----------
             logger.debug(f"[A1] merged skills_list(len={len(skills_list)}) sample={skills_list[:8]}")
             logger.debug(f"[A1] languages(list)={languages}")
-            logger.debug(f"[A1] interests(list)={interests}")
             jd_preview = jd_input[:300] if isinstance(jd_input, str) else jd_input
             jd_len = len(jd_input) if isinstance(jd_input, str) else "NA"
             logger.debug(f"[A1] jd_input(type={type(jd_input).__name__}, len≈{jd_len}) preview={jd_preview}")
@@ -224,11 +217,14 @@ class LLMResumeJobDescription(LLMResumer):
             # ---------- [B0] Prompt与入参探针 ----------
             tpl_preview = (additional_skills_prompt_template[:220] if additional_skills_prompt_template else None)
             logger.debug(f"[B0] prompt_additional_skills (first 220)={tpl_preview!r}")
-            logger.debug(f"[B0] LLM inputs: langs={languages} | interests={interests} | skills_len={len(skills_list)} sample={skills_list[:5]}")
+            logger.debug(
+                f"[B0] LLM inputs: work_exp_chars={len(work_experience_text)} | "
+                f"langs={languages} | skills_len={len(skills_list)} sample={skills_list[:5]}"
+            )
 
             output = (chain | StrOutputParser()).invoke({
+                "work_experience": work_experience_text,
                 "languages": languages,
-                "interests": interests,
                 "skills": skills_list,
                 "job_description": jd_input,
                 "output_language": output_language,
@@ -320,7 +316,7 @@ class LLMResumeJobDescription(LLMResumer):
         - Brand/tool hygiene: feel free to introduce **brand-agnostic** capabilities (e.g., “version control branching and review,” “CI/CD automation,” “monitoring & logging”) even if the specific vendor name is not provided. Only name a specific brand/tool if it is already known or unambiguously implied.
         - Impact language: prefer CAR-style bullets (Challenge → Action → Result). Use strong verbs and clear outcomes; where numbers are not available, use qualitative impact (stability, reliability, latency, scalability, maintainability, cycle time).
         - Tense: current role → present; prior roles → past.
-        - Brevity & ATS: 3–6 bullets per role; concise, skimmable, and keyword-rich without sounding stuffed.
+        - Brevity & ATS: 3–6 bullets per role; for any role whose job title contains "Freelance", use at most 2 bullets and keep only the strongest, most relevant evidence.
 
         ### PRIORITIZATION
         - Cover the JD’s highest-weight themes first (domain, core responsibilities, required skills, must-have tools or their brand-agnostic equivalents).
@@ -383,7 +379,7 @@ class LLMResumeJobDescription(LLMResumer):
         if not html.lstrip().startswith("<"):
             html = f"<section id='work-experience'><h2>Work Experience</h2><div>{html}</div></section>"
 
+        html = _normalize_work_section(html)
+
         logger.info("[RESULT][WORK-EXP][EDIT-ONLY, no coverage] === HTML START ===\n{}\n=== HTML END ===", html)
         return html
-
-

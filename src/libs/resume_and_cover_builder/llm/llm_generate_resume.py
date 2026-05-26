@@ -54,6 +54,7 @@ def _normalize_work_section(html_text: str,
     """
     Enforce output hygiene after generation:
     - Each role has 3–6 bullets (if too many, keep the most informative; if too few, leave as-is).
+    - Freelance roles have at most 2 bullets to avoid overweighting short-term work.
     - Each bullet length limit (EN by words, CN by chars). Overlong bullets are gracefully truncated with an ellipsis.
     """
     if 'BeautifulSoup' not in globals() or BeautifulSoup is None:
@@ -77,11 +78,14 @@ def _normalize_work_section(html_text: str,
                 continue
 
             li_nodes = ul.find_all("li")
+            title_node = entry.select_one(".entry-title")
+            title_text = title_node.get_text(" ", strip=True).lower() if title_node else ""
+            entry_max_bullets = 2 if "freelance" in title_text else max_bullets
 
             # If too many bullets, keep top-K by text length (proxy for informativeness)
-            if len(li_nodes) > max_bullets:
+            if len(li_nodes) > entry_max_bullets:
                 li_nodes_sorted = sorted(li_nodes, key=lambda li: len(li.get_text(" ", strip=True)), reverse=True)
-                keep = set(li_nodes_sorted[:max_bullets])
+                keep = set(li_nodes_sorted[:entry_max_bullets])
                 for li in li_nodes:
                     if li not in keep:
                         li.decompose()
@@ -389,23 +393,73 @@ class LLMResumer:
 
     @staticmethod
     def _normalize_additional_skills_html(output: str) -> str:
-        """Normalize Additional Skills HTML to avoid accidental bold bleed from malformed tags."""
+        """Normalize Skills HTML to avoid accidental bold bleed from malformed tags."""
         if not isinstance(output, str) or not output.strip():
             return output
         try:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(output, "html.parser")
-            for li in soup.find_all("li"):
-                text = li.get_text(" ", strip=True)
+            section = soup.find("section", id=lambda value: value in ("skills", "skills-languages"))
+            if section:
+                section["id"] = "skills"
+            heading = soup.find("h2")
+            if heading and heading.get_text(" ", strip=True).lower() == "additional skills":
+                heading.string = "Skills"
+
+            skill_texts: list[str] = []
+            source_nodes = []
+            if section:
+                source_nodes = section.select(".skill-item")
+                if not source_nodes:
+                    source_nodes = section.find_all("li")
+
+            for node in source_nodes:
+                text = node.get_text(" ", strip=True)
+                if not text or "[" in text or "]" in text:
+                    continue
                 if text.lower().startswith("languages:"):
-                    lang_text = text.split(":", 1)[1].strip() if ":" in text else text
-                    li.clear()
-                    li.append("Languages:")
-                    if lang_text:
-                        li.append(" " + lang_text)
+                    text = "Languages: " + text.split(":", 1)[1].strip()
+                skill_texts.append(text)
+
+            if section and skill_texts:
+                seen = set()
+                regular_items = []
+                language_item = ""
+                for text in skill_texts:
+                    key = re.sub(r"\s+", " ", text).strip().lower()
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    if key.startswith("languages:"):
+                        language_item = text
+                    else:
+                        regular_items.append(text)
+
+                inline = soup.new_tag("div")
+                inline["class"] = ["skills-inline"]
+                for text in regular_items + ([language_item] if language_item else []):
+                    span = soup.new_tag("span")
+                    span["class"] = ["skill-item"]
+                    span.string = text
+                    inline.append(span)
+
+                for child in list(section.contents):
+                    if getattr(child, "name", None) != "h2":
+                        child.extract()
+                section.append(inline)
             return str(soup)
         except Exception:
             return output
+
+    @staticmethod
+    def _html_to_visible_text(html_text: str) -> str:
+        if not isinstance(html_text, str) or not html_text.strip():
+            return ""
+        try:
+            soup = BeautifulSoup(html_text, "html.parser")
+            return soup.get_text(separator="\n", strip=True)
+        except Exception:
+            return re.sub(r"<[^>]+>", " ", html_text)
 
 
     def set_resume(self, resume) -> None:
@@ -488,7 +542,7 @@ class LLMResumer:
     - Must-have vocabulary (from JD): {must_include_terms}.
     - Bullet style: CAR framing (Challenge → Action → Result). Start with a strong verb; end with a quantified result.
     - Quantify: If exact numbers are missing, use clear approximations (~, ≈) and label them as such.
-    - Length & Density: 3–6 bullets per role; each bullet concise (avoid run-ons).
+    - Length & Density: 3–6 bullets per role; for any role whose title contains "Freelance", use at most 2 bullets and keep only the strongest evidence.
     - Relevance: Remove details not aligned to the JD; surface tools/domains that match the JD.
     - Tense: Current role may be present tense; past roles in past tense.
     - Tone: Active, specific, measurable; avoid fluff such as "responsible for".
@@ -739,7 +793,7 @@ class LLMResumer:
         logger.debug("Achievements section generation completed")
         return output
     
-    def generate_additional_skills_section(self, data = None) -> str:
+    def generate_additional_skills_section(self, work_experience_html: str = "", data = None) -> str:
         """
         Generate the additional skills section of the resume.
         Returns:
@@ -761,8 +815,8 @@ class LLMResumer:
         prompt = ChatPromptTemplate.from_template(additional_skills_prompt_template)
         chain = prompt | self.llm_cheap | StrOutputParser()
         input_data = {
+            "work_experience": self._html_to_visible_text(work_experience_html),
             "languages": self.resume.languages,
-            "interests": self.resume.interests,
             "skills": skills,
         } if data is None else data
         output = chain.invoke(input_data)
@@ -795,19 +849,12 @@ class LLMResumer:
             return ""
         
 
-        def additional_skills_fn():
-            if (self.resume.experience_details or self.resume.education_details or
-                self.resume.languages or self.resume.interests):
-                return self.generate_additional_skills_section()
-            return ""
-
         # Create a dictionary to map the function names to their respective callables
         functions = {
             "header": header_fn,
             "education": education_fn,
             "work_experience": work_experience_fn,
             "achievements": achievements_fn,
-            "additional_skills": additional_skills_fn,
         }
 
         # Use ThreadPoolExecutor to run the functions in parallel
@@ -825,6 +872,11 @@ class LLMResumer:
 
         if results.get("header"):
             results["header"] = _inject_profile_photo_in_header(results["header"])
+
+        if (results.get("work_experience") or self.resume.languages):
+            results["additional_skills"] = self.generate_additional_skills_section(
+                work_experience_html=results.get("work_experience", "")
+            )
 
         full_resume = "<body>\n"
         full_resume += f"  {results.get('header', '')}\n"

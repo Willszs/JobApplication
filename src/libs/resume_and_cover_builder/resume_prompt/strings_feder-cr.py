@@ -61,14 +61,23 @@ Act as an HR expert and resume writer with a specialization in creating ATS-frie
 
 
 prompt_additional_skills = """
-Act as an HR expert and resume writer with a specialization in creating ATS-friendly resumes. Your task is to list additional skills relevant to the job. For each skill, ensure you include:
+Act as an HR expert and resume writer with a specialization in ATS-friendly resumes. Your task is to create a concise **Skills** section based primarily on the generated Work Experience.
 
-1. **Skill Category**: Clearly state the category or type of skill.
-2. **Specific Skills**: List the specific skills or technologies within each category.
-3. **Proficiency and Experience**: Briefly describe your experience and proficiency level.
+Rules:
+- Use Generated Work Experience as the primary factual source.
+- Use Known Skills and Languages only as supporting context.
+- Group related skills into concise categories.
+- Do not invent tools, brands, certifications, or domains.
+- If Languages are provided, include them as the final inline item in the Skills section.
+- Render each skill category as an inline item, one after another, not as a vertical bullet list.
+- Return HTML only.
 
-- **My information:**  
-  {languages}
-  {interests}
-  {skills}
+Generated Work Experience:
+{work_experience}
+
+Known Skills:
+{skills}
+
+Languages:
+{languages}
 """+ prompt_additional_skills_template

@@ -85,39 +85,32 @@ To implement this:
 
 
 prompt_additional_skills = """
-Act as a senior HR/ATS resume editor. Craft an **Additional Skills** section that is tightly aligned with the target **Job Description & Requirements** while remaining faithful to the candidate’s background.
+Act as a senior HR/ATS resume editor. Craft a concise **Skills** section by summarizing the candidate's already-generated Work Experience.
 
-Goals
-- **Coverage:** Aim to cover **≥80%** of the core themes and requirements present in the job description.
-- **Relevance-first:** Prioritize skills that directly support the JD’s responsibilities (e.g., C/C++, embedded/Linux, testing & debugging, CI/CD, documentation, performance & reliability, collaboration).
-- **Non-duplication:** Do **not** repeat tools/skills that are already strongly emphasized in the candidate’s **Work Experience**; list them only if they are critical gaps for JD coverage and keep them concise.
-- **Grounded augmentation:** You may perform **reasonable, brand-agnostic grouping/expansion** to improve alignment (e.g., “version control branching & code review”, “unit/integration testing”, “monitoring & logging”), but **do not fabricate specific brands/tools** that are not present in the inputs.
+Primary source:
+- Use **Generated Work Experience** as the factual source for technical skills, tools, domains, methods, and capabilities.
+- Use **Job Description** only to prioritize and group skills that are most relevant to the target role.
+- Use **Known Skills** and **Languages** only as supporting context; do not let them override the generated work experience.
 
-Rules
-- Primary inputs are `languages`, `interests`, and `skills`. Use the **job_description** to:
-  1) **Group and title** skills into sensible categories (e.g., Programming, Embedded/Linux, Testing & Debugging, CI/CD & DevOps, Documentation, Soft Skills, Languages).
-  2) **Select** and **prioritize** items most relevant to the JD.
-- Keep brand names **only** if they appear in the inputs; otherwise use generic capability terms.
-- If a proficiency/level exists in the inputs, include it; otherwise omit levels (do not invent).
-- Omit any empty sections. Eliminate placeholders or filler items.
+Rules:
+- Do not invent specific tools, brands, certifications, or domains that are not present in Generated Work Experience or Known Skills.
+- Prefer concrete skill names and ATS-friendly phrasing.
+- Group skills into 4-6 concise categories ordered by JD relevance.
+- If Languages are provided, include them as the final inline item in the Skills section.
+- Render each skill category as an inline item, one after another, not as a vertical bullet list.
+- Omit interests unless they are clearly professional and relevant.
+- Do not output placeholders, explanations, markdown fences, or text outside the HTML.
 
-Output Requirements
-For each category produce one bullet/line with:
-1) **Skill Category** — concise, JD-relevant label.
-2) **Specific Skills** — comma-separated list, **deduplicated** vs. Work Experience-emphasized items; prefer capability phrasing when brands are absent.
-3) **(Optional) Proficiency/Experience** — include only when present in inputs (e.g., “English (C1)”, “GoogleTest — unit tests & mocks”).
+Generated Work Experience:
+{work_experience}
 
-Formatting Hints
-- Keep 4–6 categories maximum, ordered by JD relevance (top = must-have).
-- Render languages as “Name (Level)” when level exists.
-- Be concise and ATS-friendly (no long sentences).
+Known Skills:
+{skills}
 
-My data (use these as the factual source; use job_description for grouping/prioritization only):
-- languages: {languages}
-- interests: {interests}
-- skills: {skills}
+Languages:
+{languages}
 
-Job Description (use to group/prioritize; do not invent brands not present above):
+Job Description:
 {job_description}
 """ + prompt_additional_skills_template
 
@@ -149,4 +142,3 @@ This comprehensive overview will serve as a guideline for the recruitment proces
 ---
 
 # Job Description Summary"""
-
