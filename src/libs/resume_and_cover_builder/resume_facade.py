@@ -9,6 +9,7 @@ import inquirer
 from pathlib import Path
 from urllib.parse import urlparse
 
+import requests
 from loguru import logger
 
 from src.job import Job
@@ -105,6 +106,40 @@ class ResumeFacade:
         except Exception:
             host = str(job_url).lower()
         return "zhipin.com" in host
+
+    @staticmethod
+    def _is_linkedin_url(job_url: str) -> bool:
+        if not job_url:
+            return False
+        try:
+            host = (urlparse(job_url).netloc or "").lower()
+        except Exception:
+            host = str(job_url).lower()
+        return "linkedin.com" in host
+
+    @staticmethod
+    def _fetch_public_job_html(job_url: str) -> str:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        try:
+            response = requests.get(job_url, headers=headers, timeout=15)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            logger.warning("Public job HTML fetch failed for {}: {}", job_url, exc)
+            return ""
+
+        html = response.text or ""
+        if len(html) < 1000:
+            logger.warning("Public job HTML fetch returned a short response for {}.", job_url)
+            return ""
+        return html
 
     @classmethod
     def _contains_blocked_page_markers(cls, text: str) -> bool:
@@ -291,9 +326,7 @@ class ResumeFacade:
 
         return "\n".join(lines).strip()
 
-    def _extract_job_fields_from_current_page(self, job_url: str) -> None:
-        body_element = self.driver.find_element("tag name", "body")
-        body_html = body_element.get_attribute("outerHTML")
+    def _extract_job_fields_from_html(self, body_html: str, job_url: str) -> None:
         self.llm_job_parser = LLMParser(openai_api_key=global_config.API_KEY)
         self.llm_job_parser.set_body_html(body_html)
 
@@ -303,6 +336,31 @@ class ResumeFacade:
         self.job.description = self.llm_job_parser.extract_job_description()
         self.job.location = self.llm_job_parser.extract_location()
         self.job.link = job_url
+
+    def _extract_job_fields_from_current_page(self, job_url: str) -> None:
+        body_element = self.driver.find_element("tag name", "body")
+        body_html = body_element.get_attribute("outerHTML")
+        self._extract_job_fields_from_html(body_html, job_url)
+
+    def _try_public_linkedin_extraction(self, job_url: str) -> bool:
+        if not self._is_linkedin_url(job_url):
+            return False
+
+        logger.info("Trying LinkedIn public HTML extraction before asking for login.")
+        body_html = self._fetch_public_job_html(job_url)
+        if not body_html:
+            return False
+
+        self._extract_job_fields_from_html(body_html, job_url)
+        if self._is_job_description_usable(self.job.description):
+            logger.info("LinkedIn public HTML extraction succeeded.")
+            return True
+
+        logger.warning(
+            "LinkedIn public HTML extraction did not produce a usable JD. Preview: {}",
+            self._normalize_text(getattr(self.job, "description", ""))[:240],
+        )
+        return False
 
     def link_to_job(self, job_url):
         normalized_job_url = self._normalize_job_url(job_url)
@@ -315,6 +373,9 @@ class ResumeFacade:
             ) from e
 
         self.driver.implicitly_wait(10)
+        if self._try_public_linkedin_extraction(normalized_job_url):
+            return
+
         self._prompt_boss_manual_login(normalized_job_url)
         initial_wait = 40 if self._is_boss_url(normalized_job_url) else 20
         self._wait_for_readable_page(timeout_seconds=initial_wait)
