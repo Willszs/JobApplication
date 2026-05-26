@@ -20,6 +20,7 @@ import re  # 顶部若没有，补上
 
 import html
 from bs4 import BeautifulSoup
+from config import LLM_MODEL
 from src.libs.resume_and_cover_builder.config import global_config
 
 def _is_chinese_char(ch: str) -> bool:
@@ -258,7 +259,7 @@ class LLMResumer:
     def __init__(self, openai_api_key, strings):
         self.llm_cheap = LoggerChatModel(
             ChatOpenAI(
-                model_name="gpt-4.1", openai_api_key=openai_api_key, temperature=0.4
+                model_name=LLM_MODEL, openai_api_key=openai_api_key, temperature=0.4
             )
         )
         self.strings = strings

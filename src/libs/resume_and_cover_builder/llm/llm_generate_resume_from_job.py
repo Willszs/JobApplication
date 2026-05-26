@@ -9,41 +9,11 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from src.libs.resume_and_cover_builder.llm.llm_generate_resume import LLMResumer
-
-# 放在 imports 后面
-import json
+from src.utils.language import detect_jd_language
 
 
 # Load environment variables from .env file
 load_dotenv()
-
-
-def _detect_jd_language(jd_text: str) -> str:
-    """
-    Detect JD language with a lightweight mixed-language heuristic.
-    Returns:
-        "zh" for Chinese-dominant JD, otherwise "en".
-    """
-    text = (jd_text or "").strip()
-    if not text:
-        return "en"
-
-    zh_markers = (
-        "岗位职责", "工作职责", "职位描述", "工作内容", "任职要求",
-        "岗位要求", "我们希望", "你将负责", "你将做什么", "加分项",
-        "负责", "要求", "职位", "岗位"
-    )
-    if any(marker in text for marker in zh_markers):
-        return "zh"
-
-    zh_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
-    latin_chars = len(re.findall(r"[A-Za-z]", text))
-
-    if zh_chars >= 10 and zh_chars >= int(latin_chars * 0.1):
-        return "zh"
-    if zh_chars >= 8 and zh_chars > latin_chars:
-        return "zh"
-    return "en"
 
 
 def _language_label(language_code: str) -> str:
@@ -72,7 +42,7 @@ class LLMResumeJobDescription(LLMResumer):
         if not job_description_text or not str(job_description_text).strip():
             raise ValueError("Job description text is empty.")
 
-        detected_language = _detect_jd_language(str(job_description_text))
+        detected_language = detect_jd_language(str(job_description_text))
         self.target_resume_language = detected_language
 
         output_language_rule = (
@@ -415,7 +385,5 @@ class LLMResumeJobDescription(LLMResumer):
 
         logger.info("[RESULT][WORK-EXP][EDIT-ONLY, no coverage] === HTML START ===\n{}\n=== HTML END ===", html)
         return html
-
-
 
 

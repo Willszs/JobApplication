@@ -1,26 +1,18 @@
-import tempfile
 import textwrap
-import time
 import re  # For email validation
 import json
 import html as html_lib
 from src.libs.resume_and_cover_builder.utils import LoggerChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.output_parsers import JsonOutputParser  # 严格 JSON 解析
-from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from loguru import logger
-from langchain_core.prompt_values import StringPromptValue
-from langchain_core.runnables import RunnablePassthrough
 from langchain_text_splitters import TokenTextSplitter
 from langchain_community.embeddings import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
-from lib_resume_builder_AIHawk.config import global_config
-from langchain_community.document_loaders import TextLoader
-from requests.exceptions import HTTPError as HTTPStatusError  # HTTP error handling
-import openai
+from config import LLM_MODEL
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -31,7 +23,7 @@ class LLMParser:
     def __init__(self, openai_api_key):
         self.llm = LoggerChatModel(
             ChatOpenAI(
-                model_name="gpt-4.1",
+                model_name=LLM_MODEL,
                 openai_api_key=openai_api_key,
                 temperature=0.2
             )

@@ -8,8 +8,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from dotenv import load_dotenv
-from requests.exceptions import HTTPError as HTTPStatusError
 from loguru import logger
+from config import LLM_MODEL
 from src.libs.resume_and_cover_builder.utils import current_month_year
 
 today = current_month_year(tz="Europe/Berlin", lang="en")
@@ -20,7 +20,9 @@ load_dotenv()
 
 class LLMCoverLetterJobDescription:
     def __init__(self, openai_api_key, strings):
-        self.llm_cheap = LoggerChatModel(ChatOpenAI(model_name="gpt-4.1", openai_api_key=openai_api_key, temperature=0.2))
+        self.llm_cheap = LoggerChatModel(
+            ChatOpenAI(model_name=LLM_MODEL, openai_api_key=openai_api_key, temperature=0.2)
+        )
         self.llm_embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
         self.strings = strings
         self.company_name = ""

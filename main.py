@@ -1,6 +1,5 @@
 import base64
 import os
-import re
 import hashlib
 from pathlib import Path
 import traceback
@@ -17,9 +16,7 @@ from src.utils.constants import (
     PLAIN_TEXT_RESUME_YAML,
     SECRETS_YAML,
 )
-# from ai_hawk.bot_facade import AIHawkBotFacade
-# from ai_hawk.job_manager import AIHawkJobManager
-# from ai_hawk.llm.llm_manager import GPTAnswerer
+from src.utils.language import detect_jd_language
 
 
 class ConfigError(Exception):
@@ -174,33 +171,12 @@ def _prompt_pasted_jd_text() -> str:
     return jd_text
 
 
-def _detect_jd_language_for_menu(jd_text: str) -> str:
-    text = (jd_text or "").strip()
-    if not text:
-        return "en"
-
-    zh_markers = (
-        "岗位职责", "工作职责", "职位描述", "工作内容", "任职要求",
-        "岗位要求", "我们希望", "你将负责", "加分项", "岗位", "职位", "职责", "要求"
-    )
-    if any(marker in text for marker in zh_markers):
-        return "zh"
-
-    zh_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
-    latin_chars = len(re.findall(r"[A-Za-z]", text))
-    if zh_chars >= 10 and zh_chars >= int(latin_chars * 0.1):
-        return "zh"
-    if zh_chars >= 8 and zh_chars > latin_chars:
-        return "zh"
-    return "en"
-
-
 def create_resume_pdf_from_pasted_chinese_jd(parameters: dict, llm_api_key: str):
     """Generate a resume PDF tailored to pasted Chinese JD text."""
     try:
         logger.info("Generating a CV from pasted Chinese JD.")
         jd_text = _prompt_pasted_jd_text()
-        if _detect_jd_language_for_menu(jd_text) != "zh":
+        if detect_jd_language(jd_text) != "zh":
             raise ValueError(
                 "该选项仅支持中文JD。你粘贴的内容看起来不是中文JD，请改用“Generate Resume Tailored for Job Description”。"
             )
@@ -294,7 +270,27 @@ def _write_pdf(output_path: Path, result_base64: str) -> None:
         file.write(pdf_data)
     logger.info(f"PDF saved at: {output_path}")
 
-        
+
+ACTION_HANDLERS = {
+    "Generate Resume": (
+        "Crafting a standout professional resume...",
+        create_resume_pdf,
+    ),
+    "Generate Resume Tailored for Job Description": (
+        "Customizing your resume to enhance your job application...",
+        create_resume_pdf_job_tailored,
+    ),
+    "Generate Tailored Cover Letter for Job Description": (
+        "Designing a personalized cover letter to enhance your job application...",
+        create_cover_letter,
+    ),
+    "Paste Chinese JD and Generate Tailored Resume": (
+        "Generating tailored resume from pasted Chinese JD...",
+        create_resume_pdf_from_pasted_chinese_jd,
+    ),
+}
+
+
 def handle_inquiries(selected_action: str, parameters: dict, llm_api_key: str):
     """
     Decide which function to call based on the selected user actions.
@@ -304,25 +300,18 @@ def handle_inquiries(selected_action: str, parameters: dict, llm_api_key: str):
     :param llm_api_key: API key for the language model.
     """
     try:
-        if selected_action:
-            if "Generate Resume" == selected_action:
-                logger.info("Crafting a standout professional resume...")
-                create_resume_pdf(parameters, llm_api_key)
-                
-            if "Generate Resume Tailored for Job Description" == selected_action:
-                logger.info("Customizing your resume to enhance your job application...")
-                create_resume_pdf_job_tailored(parameters, llm_api_key)
-                
-            if "Generate Tailored Cover Letter for Job Description" == selected_action:
-                logger.info("Designing a personalized cover letter to enhance your job application...")
-                create_cover_letter(parameters, llm_api_key)
-
-            if "Paste Chinese JD and Generate Tailored Resume" == selected_action:
-                logger.info("Generating tailored resume from pasted Chinese JD...")
-                create_resume_pdf_from_pasted_chinese_jd(parameters, llm_api_key)
-
-        else:
+        if not selected_action:
             logger.warning("No actions selected. Nothing to execute.")
+            return
+
+        handler_entry = ACTION_HANDLERS.get(selected_action)
+        if not handler_entry:
+            logger.warning(f"Unknown action selected: {selected_action}")
+            return
+
+        log_message, handler = handler_entry
+        logger.info(log_message)
+        handler(parameters, llm_api_key)
     except Exception as e:
         logger.exception(f"An error occurred while handling inquiries: {e}")
         raise
@@ -338,12 +327,7 @@ def prompt_user_action() -> str:
             inquirer.List(
                 'action',
                 message="Select the action you want to perform:",
-                choices=[
-                    "Generate Resume",
-                    "Generate Resume Tailored for Job Description",
-                    "Generate Tailored Cover Letter for Job Description",
-                    "Paste Chinese JD and Generate Tailored Resume",
-                ],
+                choices=list(ACTION_HANDLERS.keys()),
             ),
         ]
         answer = inquirer.prompt(questions)

@@ -4,18 +4,12 @@ This module is responsible for generating resumes and cover letters using the LL
 # app/libs/resume_and_cover_builder/resume_generator.py
 from string import Template
 from typing import Any
-import sys
-from loguru import logger
 
 from src.libs.resume_and_cover_builder.llm.llm_generate_resume import LLMResumer
 from src.libs.resume_and_cover_builder.llm.llm_generate_resume_from_job import LLMResumeJobDescription
 from src.libs.resume_and_cover_builder.llm.llm_generate_cover_letter_from_job import LLMCoverLetterJobDescription
 from .module_loader import load_module
 from .config import global_config
-
-# --- logging: show logs in terminal ---
-logger.remove()
-logger.add(sys.stderr, level="DEBUG")
 
 
 class ResumeGenerator:
