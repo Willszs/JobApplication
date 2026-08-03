@@ -1,6 +1,7 @@
 """
 This module contains the FacadeManager class, which is responsible for managing the interaction between the user and other components of the application.
 """
+from datetime import date
 import hashlib
 import re
 import time
@@ -87,6 +88,33 @@ class ResumeFacade:
     @staticmethod
     def _normalize_text(text: str) -> str:
         return re.sub(r"\s+", " ", (text or "")).strip()
+
+    @staticmethod
+    def _path_component(text: str, fallback: str) -> str:
+        normalized = ResumeFacade._normalize_text(text)
+        if not normalized:
+            return fallback
+
+        normalized = re.sub(r"[^\w\s.-]+", "", normalized, flags=re.UNICODE)
+        normalized = re.sub(r"[\s_]+", "-", normalized)
+        normalized = normalized.strip(".-")
+        if not normalized:
+            return fallback
+        return normalized[:60].strip(".-") or fallback
+
+    def _suggest_output_folder_name(self, fallback_source: str) -> str:
+        today = date.today().isoformat()
+        company = self._path_component(getattr(self.job, "company", ""), "")
+        role = self._path_component(getattr(self.job, "role", ""), "")
+
+        if company or role:
+            return "_".join(part for part in (today, company, role) if part)
+
+        source = fallback_source or getattr(self.job, "link", "") or today
+        source_hash = hashlib.md5(source.encode()).hexdigest()[:10]
+        if source.startswith("manual_chinese_jd_"):
+            return f"{today}_manual-chinese-jd_{source_hash}"
+        return f"{today}_job_{source_hash}"
 
     @staticmethod
     def _normalize_job_url(job_url: str) -> str:
@@ -430,23 +458,23 @@ class ResumeFacade:
             )
 
         html_resume = self.resume_generator.create_resume_job_description_text(style_path, self.job.description)
-        suggested_name = hashlib.md5(self.job.link.encode()).hexdigest()[:10]
+        suggested_name = self._suggest_output_folder_name(self.job.link)
 
         result = HTML_to_PDF(html_resume, self.driver, enable_manual_review=enable_manual_review)
         self._safe_quit_driver()
         return result, suggested_name
 
-    def create_resume_pdf(self) -> tuple[bytes, str]:
+    def create_resume_pdf(self, enable_manual_review: bool = True) -> tuple[bytes, str]:
         style_path = self.style_manager.get_style_path()
         if style_path is None:
             raise ValueError("You must choose a style before generating the PDF.")
 
         html_resume = self.resume_generator.create_resume(style_path)
-        result = HTML_to_PDF(html_resume, self.driver, enable_manual_review=True)
+        result = HTML_to_PDF(html_resume, self.driver, enable_manual_review=enable_manual_review)
         self._safe_quit_driver()
         return result
 
-    def create_cover_letter(self) -> tuple[bytes, str]:
+    def create_cover_letter(self, enable_manual_review: bool = True) -> tuple[bytes, str]:
         style_path = self.style_manager.get_style_path()
         if style_path is None:
             raise ValueError("You must choose a style before generating the PDF.")
@@ -461,8 +489,8 @@ class ResumeFacade:
             self.job.description,
             self.job.company,
         )
-        suggested_name = hashlib.md5(self.job.link.encode()).hexdigest()[:10]
+        suggested_name = self._suggest_output_folder_name(self.job.link)
 
-        result = HTML_to_PDF(cover_letter_html, self.driver, enable_manual_review=True)
+        result = HTML_to_PDF(cover_letter_html, self.driver, enable_manual_review=enable_manual_review)
         self._safe_quit_driver()
         return result, suggested_name

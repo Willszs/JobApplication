@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import date
 import os
 import hashlib
 from pathlib import Path
@@ -14,6 +15,9 @@ from src.utils.constants import (
     PLAIN_TEXT_RESUME_YAML,
     SECRETS_YAML,
 )
+
+
+HEADLESS_ENV_VAR = "JOBAI_HEADLESS"
 
 
 class ConfigError(Exception):
@@ -37,22 +41,25 @@ class ConfigValidator:
             with open(yaml_path, "r") as stream:
                 return yaml.safe_load(stream)
         except yaml.YAMLError as exc:
-            raise ConfigError(f"Error reading YAML file {yaml_path}: {exc}")
+            raise ConfigError(f"YAML 格式错误：{yaml_path}。请检查缩进、冒号和引号是否正确。原始错误：{exc}")
         except FileNotFoundError:
-            raise ConfigError(f"YAML file not found: {yaml_path}")
+            raise ConfigError(f"找不到配置文件：{yaml_path}")
 
     @staticmethod
     def validate_secrets(secrets_yaml_path: Path) -> str:
         """Validate the secrets YAML file and retrieve the LLM API key."""
         secrets = ConfigValidator.load_yaml(secrets_yaml_path)
+        if not isinstance(secrets, dict):
+            raise ConfigError(f"{secrets_yaml_path} 内容为空或格式不正确，请参考 data_folder_example/secrets.example.yaml。")
+
         mandatory_secrets = ["llm_api_key"]
 
         for secret in mandatory_secrets:
             if secret not in secrets:
-                raise ConfigError(f"Missing secret '{secret}' in {secrets_yaml_path}")
+                raise ConfigError(f"{secrets_yaml_path} 缺少必填项：{secret}")
 
             if not secrets[secret]:
-                raise ConfigError(f"Secret '{secret}' cannot be empty in {secrets_yaml_path}")
+                raise ConfigError(f"{secrets_yaml_path} 里的 {secret} 不能为空，请填入你的 LLM API key。")
 
         return secrets["llm_api_key"]
 
@@ -69,11 +76,17 @@ class FileManager:
     def validate_data_folder(app_data_folder: Path) -> Tuple[Path, Path, Path]:
         """Validate the existence of the data folder and required files."""
         if not app_data_folder.is_dir():
-            raise FileNotFoundError(f"Data folder not found: {app_data_folder}")
+            raise FileNotFoundError(
+                f"找不到数据目录：{app_data_folder}。请创建该目录，或设置 JOBAI_USER_DATA_DIR 指向你的数据目录。"
+            )
 
         missing_files = [file for file in FileManager.REQUIRED_FILES if not (app_data_folder / file).exists()]
         if missing_files:
-            raise FileNotFoundError(f"Missing files in data folder: {', '.join(missing_files)}")
+            examples = ", ".join(f"data_folder_example/{file}" for file in missing_files)
+            raise FileNotFoundError(
+                f"{app_data_folder} 缺少必要文件：{', '.join(missing_files)}。"
+                f"可以参考或复制示例文件：{examples}"
+            )
 
         output_folder = app_data_folder / "output"
         output_folder.mkdir(exist_ok=True)
@@ -90,7 +103,9 @@ class FileManager:
     def get_uploads(plain_text_resume_file: Path) -> Dict[str, Path]:
         """Convert resume file paths to a dictionary."""
         if not plain_text_resume_file.exists():
-            raise FileNotFoundError(f"Plain text resume file not found: {plain_text_resume_file}")
+            raise FileNotFoundError(
+                f"找不到简历数据文件：{plain_text_resume_file}。请参考 data_folder_example/plain_text_resume.example.yaml。"
+            )
 
         uploads = {"plainTextResume": plain_text_resume_file}
 
@@ -122,10 +137,11 @@ def create_cover_letter(parameters: dict, llm_api_key: str):
     try:
         logger.info("Generating a cover letter based on provided parameters.")
         job_url = _prompt_job_url()
-        resume_facade = _build_resume_facade(parameters, llm_api_key)
+        headless = is_headless_mode_enabled()
+        resume_facade = _build_resume_facade(parameters, llm_api_key, headless=headless)
         resume_facade.link_to_job(job_url)
-        result_base64, suggested_name = resume_facade.create_cover_letter()
-        output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "cover_letter_tailored.pdf"
+        result_base64, suggested_name = resume_facade.create_cover_letter(enable_manual_review=not headless)
+        output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "cover_letter.pdf"
         _write_pdf(output_path, result_base64)
     except Exception as e:
         logger.exception(f"An error occurred while creating the CV: {e}")
@@ -137,10 +153,11 @@ def create_resume_pdf_job_tailored(parameters: dict, llm_api_key: str):
     try:
         logger.info("Generating a CV based on provided parameters.")
         job_url = _prompt_job_url()
-        resume_facade = _build_resume_facade(parameters, llm_api_key)
+        headless = is_headless_mode_enabled()
+        resume_facade = _build_resume_facade(parameters, llm_api_key, headless=headless)
         resume_facade.link_to_job(job_url)
-        result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored()
-        output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "resume_tailored.pdf"
+        result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored(enable_manual_review=not headless)
+        output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "resume.pdf"
         _write_pdf(output_path, result_base64)
     except Exception as e:
         logger.exception(f"An error occurred while creating the CV: {e}")
@@ -181,14 +198,15 @@ def create_resume_pdf_from_pasted_chinese_jd(parameters: dict, llm_api_key: str)
                 "该选项仅支持中文JD。你粘贴的内容看起来不是中文JD，请改用“Generate Resume Tailored for Job Description”。"
             )
 
-        resume_facade = _build_resume_facade(parameters, llm_api_key)
+        headless = is_headless_mode_enabled()
+        resume_facade = _build_resume_facade(parameters, llm_api_key, headless=headless)
         jd_hash = hashlib.md5(jd_text.encode("utf-8")).hexdigest()[:12]
         resume_facade.job = Job(
             description=jd_text,
             link=f"manual_chinese_jd_{jd_hash}",
         )
-        result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored()
-        output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "resume_tailored_cn_paste.pdf"
+        result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored(enable_manual_review=not headless)
+        output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "resume.pdf"
         _write_pdf(output_path, result_base64)
     except Exception as e:
         logger.exception(f"An error occurred while creating the CV from pasted Chinese JD: {e}")
@@ -199,9 +217,10 @@ def create_resume_pdf(parameters: dict, llm_api_key: str):
     """Generate a base resume PDF without job tailoring."""
     try:
         logger.info("Generating a CV based on provided parameters.")
-        resume_facade = _build_resume_facade(parameters, llm_api_key)
-        result_base64 = resume_facade.create_resume_pdf()
-        output_path = Path(parameters["outputFileDirectory"]) / "resume_base.pdf"
+        headless = is_headless_mode_enabled()
+        resume_facade = _build_resume_facade(parameters, llm_api_key, headless=headless)
+        result_base64 = resume_facade.create_resume_pdf(enable_manual_review=not headless)
+        output_path = Path(parameters["outputFileDirectory"]) / f"{date.today().isoformat()}_base-resume" / "resume.pdf"
         _write_pdf(output_path, result_base64)
     except Exception as e:
         logger.exception(f"An error occurred while creating the CV: {e}")
@@ -229,6 +248,10 @@ def _set_default_style(style_manager: StyleManager) -> None:
     logger.warning(
         f"Preferred style '{preferred_style}' not found. Falling back to available style: {selected_style}"
     )
+
+
+def is_headless_mode_enabled() -> bool:
+    return os.getenv(HEADLESS_ENV_VAR, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _build_resume_facade(parameters: dict, llm_api_key: str, *, headless: bool = False) -> ResumeFacade:
@@ -266,7 +289,7 @@ def _write_pdf(output_path: Path, result_base64: str) -> None:
     try:
         pdf_data = base64.b64decode(result_base64)
     except base64.binascii.Error as e:
-        logger.error("Error decoding Base64: %s", e)
+        logger.error(f"PDF 数据解析失败：{e}")
         raise
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -340,8 +363,28 @@ def prompt_user_action() -> str:
             return ""
         return answer.get('action', "")
     except Exception as e:
-        logger.error(f"An error occurred while prompting action: {e}")
+        logger.error(f"菜单显示失败：{e}")
         return ""
+
+
+def log_user_friendly_error(error_type: str, message: str, *, hint: str | None = None) -> None:
+    """Log a concise Chinese error with an optional next step."""
+    logger.error(f"{error_type}：{message}")
+    if hint:
+        logger.error(f"处理建议：{hint}")
+
+
+def runtime_error_hint(error: RuntimeError) -> str:
+    """Return a helpful next step for common runtime failures."""
+    message = str(error).lower()
+    if "chrome" in message or "webdriver" in message or "selenium" in message:
+        return (
+            "请确认 Google Chrome 已安装；如果提示配置目录被占用，请关闭旧 Chrome 窗口，"
+            "或设置 JOBAI_CHROME_USER_DATA_DIR 指向一个新目录。"
+        )
+    if "api" in message or "openai" in message or "connection" in message or "timeout" in message:
+        return "请检查 user_data/secrets.yaml 里的 llm_api_key 是否有效，并确认网络可以访问对应 LLM 服务。"
+    return "请查看上方错误信息；如果需要定位代码问题，可以把完整日志发给我。"
 
 
 def main():
@@ -365,19 +408,17 @@ def main():
         handle_inquiries(selected_actions, parameters, llm_api_key)
 
     except ConfigError as ce:
-        logger.error(f"Configuration error: {ce}")
-        logger.error(
-            "Refer to the configuration guide for troubleshooting: "
-            "https://github.com/feder-cr/Auto_Jobs_Applier_AIHawk?tab=readme-ov-file#configuration"
-        )
+        log_user_friendly_error("配置错误", str(ce), hint="检查 user_data/secrets.yaml 和 user_data/plain_text_resume.yaml。")
     except FileNotFoundError as fnf:
-        logger.error(f"File not found: {fnf}")
-        logger.error("Ensure all required files are present in the data folder.")
+        log_user_friendly_error("文件缺失", str(fnf), hint="默认数据目录是 user_data，也可以用 JOBAI_USER_DATA_DIR 指定其他目录。")
+    except ValueError as ve:
+        log_user_friendly_error("输入或数据错误", str(ve), hint="请按提示补全输入，或检查简历/JD 内容是否为空。")
     except RuntimeError as re:
-        logger.error(f"Runtime error: {re}")
+        log_user_friendly_error("运行错误", str(re), hint=runtime_error_hint(re))
         logger.debug(traceback.format_exc())
     except Exception as e:
-        logger.exception(f"An unexpected error occurred: {e}")
+        logger.exception(f"未预期错误：{e}")
+        logger.error("处理建议：这是未覆盖的异常。请保留完整日志，方便继续定位。")
 
 
 if __name__ == "__main__":
