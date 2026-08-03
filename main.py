@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import os
 import hashlib
@@ -7,16 +9,11 @@ from typing import Tuple, Dict
 import inquirer
 import yaml
 
-from src.libs.resume_and_cover_builder import ResumeFacade, ResumeGenerator, StyleManager
-from src.resume_schemas.resume import Resume
-from src.job import Job
 from src.logging import logger
-from src.utils.chrome_utils import init_browser
 from src.utils.constants import (
     PLAIN_TEXT_RESUME_YAML,
     SECRETS_YAML,
 )
-from src.utils.language import detect_jd_language
 
 
 class ConfigError(Exception):
@@ -174,6 +171,9 @@ def _prompt_pasted_jd_text() -> str:
 def create_resume_pdf_from_pasted_chinese_jd(parameters: dict, llm_api_key: str):
     """Generate a resume PDF tailored to pasted Chinese JD text."""
     try:
+        from src.job import Job
+        from src.utils.language import detect_jd_language
+
         logger.info("Generating a CV from pasted Chinese JD.")
         jd_text = _prompt_pasted_jd_text()
         if detect_jd_language(jd_text) != "zh":
@@ -232,6 +232,10 @@ def _set_default_style(style_manager: StyleManager) -> None:
 
 
 def _build_resume_facade(parameters: dict, llm_api_key: str, *, headless: bool = False) -> ResumeFacade:
+    from src.libs.resume_and_cover_builder import ResumeFacade, ResumeGenerator, StyleManager
+    from src.resume_schemas.resume import Resume
+    from src.utils.chrome_utils import init_browser
+
     plain_text_resume = _load_plain_text_resume(parameters)
     style_manager = StyleManager()
     _set_default_style(style_manager)

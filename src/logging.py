@@ -2,7 +2,6 @@ import logging
 import sys
 
 from loguru import logger
-from selenium.webdriver.remote.remote_connection import LOGGER as selenium_logger
 
 from config import LOG_LEVEL, LOG_SELENIUM_LEVEL, LOG_TO_CONSOLE
 
@@ -30,6 +29,7 @@ def init_loguru_logger():
 
 def init_selenium_logger():
     """Configure selenium logger level without file sink."""
+    selenium_logger = logging.getLogger("selenium.webdriver.remote.remote_connection")
     selenium_logger.handlers.clear()
     selenium_logger.setLevel(LOG_SELENIUM_LEVEL)
 
