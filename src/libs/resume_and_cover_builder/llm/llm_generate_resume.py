@@ -374,7 +374,7 @@ class LLMResumer:
 
     @staticmethod
     def _normalize_additional_skills_html(output: str) -> str:
-        """Normalize Skills HTML to avoid accidental bold bleed from malformed tags."""
+        """Normalize Skills HTML into stable grouped rows."""
         if not isinstance(output, str) or not output.strip():
             return output
         try:
@@ -383,9 +383,29 @@ class LLMResumer:
             section = soup.find("section", id=lambda value: value in ("skills", "skills-languages"))
             if section:
                 section["id"] = "skills"
+            else:
+                section = soup.new_tag("section")
+                section["id"] = "skills"
+                heading = soup.new_tag("h2")
+                heading.string = "Skills"
+                section.append(heading)
+                soup = BeautifulSoup(str(section) + str(soup), "html.parser")
+                section = soup.find("section", id="skills")
+
             heading = soup.find("h2")
             if heading and heading.get_text(" ", strip=True).lower() == "additional skills":
                 heading.string = "Skills"
+            elif section and not section.find("h2"):
+                heading = soup.new_tag("h2")
+                heading.string = "Skills"
+                section.insert(0, heading)
+
+            def clean_skill_text(text: str) -> str:
+                text = re.sub(r"\s+", " ", (text or "")).strip()
+                text = text.strip("|•·-–— ")
+                text = re.sub(r"\s+[·•]\s*$", "", text).strip()
+                text = re.sub(r"\s+([,;:])", r"\1", text)
+                return text
 
             skill_texts: list[str] = []
             source_nodes = []
@@ -393,14 +413,25 @@ class LLMResumer:
                 source_nodes = section.select(".skill-item")
                 if not source_nodes:
                     source_nodes = section.find_all("li")
+                if not source_nodes:
+                    source_nodes = [
+                        node for node in section.find_all(["p", "div"], recursive=True)
+                        if node.get_text(" ", strip=True)
+                    ]
 
             for node in source_nodes:
-                text = node.get_text(" ", strip=True)
+                text = clean_skill_text(node.get_text(" ", strip=True))
                 if not text or "[" in text or "]" in text:
                     continue
                 if text.lower().startswith("languages:"):
                     text = "Languages: " + text.split(":", 1)[1].strip()
                 skill_texts.append(text)
+
+            if section and not skill_texts:
+                for line in section.get_text("\n", strip=True).splitlines():
+                    text = clean_skill_text(line)
+                    if text and text.lower() not in {"skills", "additional skills"} and "[" not in text:
+                        skill_texts.append(text)
 
             if section and skill_texts:
                 seen = set()
@@ -416,18 +447,24 @@ class LLMResumer:
                     else:
                         regular_items.append(text)
 
-                inline = soup.new_tag("div")
-                inline["class"] = ["skills-inline"]
+                skills_list = soup.new_tag("ul")
+                skills_list["class"] = ["skills-list"]
                 for text in regular_items + ([language_item] if language_item else []):
-                    span = soup.new_tag("span")
-                    span["class"] = ["skill-item"]
-                    span.string = text
-                    inline.append(span)
+                    li = soup.new_tag("li")
+                    if ":" in text:
+                        label, values = text.split(":", 1)
+                        strong = soup.new_tag("strong")
+                        strong.string = f"{label.strip()}:"
+                        li.append(strong)
+                        li.append(f" {values.strip()}")
+                    else:
+                        li.string = text
+                    skills_list.append(li)
 
                 for child in list(section.contents):
                     if getattr(child, "name", None) != "h2":
                         child.extract()
-                section.append(inline)
+                section.append(skills_list)
             return str(soup)
         except Exception:
             return output

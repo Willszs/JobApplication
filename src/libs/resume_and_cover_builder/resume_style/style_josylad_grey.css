@@ -155,6 +155,27 @@ h2 {
   font-weight: 500;
 }
 
+#skills .skills-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 5px 0 8px;
+}
+
+#skills .skills-list li {
+  display: block;
+  margin-bottom: 6px;
+  line-height: 1.45;
+}
+
+#skills .skills-list li::before {
+  content: none;
+}
+
+#skills .skills-list strong {
+  color: #4a4a4a;
+  font-weight: 600;
+}
+
 .skills-section {
   margin-top: 20px;
 }

@@ -215,14 +215,12 @@ prompt_additional_skills_template = """
 '''
 <section id="skills">
     <h2>Skills</h2>
-    <div class="skills-inline">
-      <span class="skill-item">[Specific Skill or Technology]</span>
-      <span class="skill-item">[Specific Skill or Technology]</span>
-      <span class="skill-item">[Specific Skill or Technology]</span>
-      <span class="skill-item">[Specific Skill or Technology]</span>
-      <span class="skill-item">Languages: [Language (Level), Language (Level)]</span>
-    </div>
+    <ul class="skills-list">
+      <li><strong>[Skill Category]:</strong> [Specific skills, tools, and methods]</li>
+      <li><strong>[Skill Category]:</strong> [Specific skills, tools, and methods]</li>
+      <li><strong>Languages:</strong> [Language (Level), Language (Level)]</li>
+    </ul>
 </section>
 '''
-Render skills as inline <span class="skill-item"> items inside .skills-inline so they flow one after another and wrap naturally. The results should be provided in html format, Provide only the html code for the resume, without any explanations or additional text and also without ```html ```
+Render skills as grouped <li> rows inside .skills-list. Each row should have a short category label in <strong>, followed by concise comma-separated skills. The results should be provided in html format, Provide only the html code for the resume, without any explanations or additional text and also without ```html ```
 """
