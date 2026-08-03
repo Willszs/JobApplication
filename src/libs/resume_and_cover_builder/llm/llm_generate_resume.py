@@ -48,14 +48,11 @@ def _count_len(s: str) -> tuple[int, bool]:
 
 def _normalize_work_section(html_text: str,
                             min_bullets: int = 3,
-                            max_bullets: int = 6,
-                            max_en_words: int = 22,
-                            max_cn_chars: int = 18) -> str:
+                            max_bullets: int = 6) -> str:
     """
     Enforce output hygiene after generation:
     - Each role has 3–6 bullets (if too many, keep the most informative; if too few, leave as-is).
     - Freelance roles have at most 2 bullets to avoid overweighting short-term work.
-    - Each bullet length limit (EN by words, CN by chars). Overlong bullets are gracefully truncated with an ellipsis.
     """
     if 'BeautifulSoup' not in globals() or BeautifulSoup is None:
         # Gracefully skip if bs4 is not installed
@@ -93,28 +90,12 @@ def _normalize_work_section(html_text: str,
 
             # If too few bullets (< min_bullets), do NOT fabricate content; leave as-is.
 
-            # Enforce length per bullet
+            # Do not truncate overlong bullets here. Truncating after generation creates
+            # unfinished sentences in the final resume; prompt rules should keep bullets concise.
             for li in li_nodes:
                 text = li.get_text(" ", strip=True)
-                n, is_cn = _count_len(text)
-                over_en = (not is_cn and n > max_en_words)
-                over_cn = (is_cn and n > max_cn_chars)
-                if over_en or over_cn:
-                    if not is_cn:
-                        # Cut by word tokens while preserving separators
-                        tokens = re.findall(r"[A-Za-z0-9\-\+\./%]+|\W+", text)
-                        kept, count = [], 0
-                        for tok in tokens:
-                            if re.match(r"[A-Za-z0-9\-\+\./%]+", tok):
-                                count += 1
-                            kept.append(tok)
-                            if count >= max_en_words:
-                                break
-                        new_text = "".join(kept).strip(",;: .") + " …"
-                    else:
-                        new_text = text[:max_cn_chars].rstrip("，、；。.:,; ") + "…"
-                    li.clear()
-                    li.append(html.escape(new_text))
+                if text.endswith(("...", "…")):
+                    logger.warning("[POST] Work experience bullet ends with ellipsis; leaving text unchanged for manual review: {}", text)
 
         return str(section)
     except Exception as e:
@@ -546,6 +527,8 @@ class LLMResumer:
     - Relevance: Remove details not aligned to the JD; surface tools/domains that match the JD.
     - Tense: Current role may be present tense; past roles in past tense.
     - Tone: Active, specific, measurable; avoid fluff such as "responsible for".
+    - Complete sentences: every bullet must be a complete sentence or complete action phrase. Never end a bullet with "...", "…", or an unfinished clause.
+    - Keep bullets concise by rewriting shorter, not by truncating.
     """
         full_template = work_experience_prompt_template + "\n" + rewrite_rules
         prompt = ChatPromptTemplate.from_template(full_template)

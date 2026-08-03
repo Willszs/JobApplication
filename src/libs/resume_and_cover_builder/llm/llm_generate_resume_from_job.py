@@ -317,6 +317,8 @@ class LLMResumeJobDescription(LLMResumer):
         - Impact language: prefer CAR-style bullets (Challenge → Action → Result). Use strong verbs and clear outcomes; where numbers are not available, use qualitative impact (stability, reliability, latency, scalability, maintainability, cycle time).
         - Tense: current role → present; prior roles → past.
         - Brevity & ATS: 3–6 bullets per role; for any role whose job title contains "Freelance", use at most 2 bullets and keep only the strongest, most relevant evidence.
+        - Complete sentences: every bullet must be a complete sentence or complete action phrase. Never end a bullet with "...", "…", or an unfinished clause.
+        - Keep bullets concise by rewriting shorter, not by truncating.
 
         ### PRIORITIZATION
         - Cover the JD’s highest-weight themes first (domain, core responsibilities, required skills, must-have tools or their brand-agnostic equivalents).
