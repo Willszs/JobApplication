@@ -17,8 +17,6 @@ from src.utils.constants import (
 )
 
 
-HEADLESS_ENV_VAR = "JOBAI_HEADLESS"
-
 
 class ConfigError(Exception):
     """
@@ -137,10 +135,9 @@ def create_cover_letter(parameters: dict, llm_api_key: str):
     try:
         logger.info("Generating a cover letter based on provided parameters.")
         job_url = _prompt_job_url()
-        headless = is_headless_mode_enabled()
-        resume_facade = _build_resume_facade(parameters, llm_api_key, headless=headless)
+        resume_facade = _build_resume_facade(parameters, llm_api_key)
         resume_facade.link_to_job(job_url)
-        result_base64, suggested_name = resume_facade.create_cover_letter(enable_manual_review=not headless)
+        result_base64, suggested_name = resume_facade.create_cover_letter()
         output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "cover_letter.pdf"
         _write_pdf(output_path, result_base64)
     except Exception as e:
@@ -153,10 +150,9 @@ def create_resume_pdf_job_tailored(parameters: dict, llm_api_key: str):
     try:
         logger.info("Generating a CV based on provided parameters.")
         job_url = _prompt_job_url()
-        headless = is_headless_mode_enabled()
-        resume_facade = _build_resume_facade(parameters, llm_api_key, headless=headless)
+        resume_facade = _build_resume_facade(parameters, llm_api_key)
         resume_facade.link_to_job(job_url)
-        result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored(enable_manual_review=not headless)
+        result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored()
         output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "resume.pdf"
         _write_pdf(output_path, result_base64)
     except Exception as e:
@@ -198,14 +194,13 @@ def create_resume_pdf_from_pasted_chinese_jd(parameters: dict, llm_api_key: str)
                 "该选项仅支持中文JD。你粘贴的内容看起来不是中文JD，请改用“Generate Resume Tailored for Job Description”。"
             )
 
-        headless = is_headless_mode_enabled()
-        resume_facade = _build_resume_facade(parameters, llm_api_key, headless=headless)
+        resume_facade = _build_resume_facade(parameters, llm_api_key)
         jd_hash = hashlib.md5(jd_text.encode("utf-8")).hexdigest()[:12]
         resume_facade.job = Job(
             description=jd_text,
             link=f"manual_chinese_jd_{jd_hash}",
         )
-        result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored(enable_manual_review=not headless)
+        result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored()
         output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "resume.pdf"
         _write_pdf(output_path, result_base64)
     except Exception as e:
@@ -217,9 +212,8 @@ def create_resume_pdf(parameters: dict, llm_api_key: str):
     """Generate a base resume PDF without job tailoring."""
     try:
         logger.info("Generating a CV based on provided parameters.")
-        headless = is_headless_mode_enabled()
-        resume_facade = _build_resume_facade(parameters, llm_api_key, headless=headless)
-        result_base64 = resume_facade.create_resume_pdf(enable_manual_review=not headless)
+        resume_facade = _build_resume_facade(parameters, llm_api_key)
+        result_base64 = resume_facade.create_resume_pdf()
         output_path = Path(parameters["outputFileDirectory"]) / f"{date.today().isoformat()}_base-resume" / "resume.pdf"
         _write_pdf(output_path, result_base64)
     except Exception as e:
@@ -249,12 +243,7 @@ def _set_default_style(style_manager: StyleManager) -> None:
         f"Preferred style '{preferred_style}' not found. Falling back to available style: {selected_style}"
     )
 
-
-def is_headless_mode_enabled() -> bool:
-    return os.getenv(HEADLESS_ENV_VAR, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _build_resume_facade(parameters: dict, llm_api_key: str, *, headless: bool = False) -> ResumeFacade:
+def _build_resume_facade(parameters: dict, llm_api_key: str) -> ResumeFacade:
     from src.libs.resume_and_cover_builder import ResumeFacade, ResumeGenerator, StyleManager
     from src.resume_schemas.resume import Resume
     from src.utils.chrome_utils import init_browser
@@ -273,7 +262,7 @@ def _build_resume_facade(parameters: dict, llm_api_key: str, *, headless: bool =
         resume_object=resume_object,
         output_path=Path(parameters["outputFileDirectory"]),
     )
-    resume_facade.set_driver(init_browser(headless=headless))
+    resume_facade.set_driver(init_browser())
     return resume_facade
 
 

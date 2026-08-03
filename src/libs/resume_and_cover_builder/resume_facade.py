@@ -447,7 +447,7 @@ class ResumeFacade:
                 "You can rerun and paste JD text when prompted."
             )
 
-    def create_resume_pdf_job_tailored(self, enable_manual_review: bool = True) -> tuple[bytes, str]:
+    def create_resume_pdf_job_tailored(self) -> tuple[bytes, str]:
         style_path = self.style_manager.get_style_path()
         if style_path is None:
             raise ValueError("You must choose a style before generating the PDF.")
@@ -460,21 +460,21 @@ class ResumeFacade:
         html_resume = self.resume_generator.create_resume_job_description_text(style_path, self.job.description)
         suggested_name = self._suggest_output_folder_name(self.job.link)
 
-        result = HTML_to_PDF(html_resume, self.driver, enable_manual_review=enable_manual_review)
+        result = HTML_to_PDF(html_resume, self.driver)
         self._safe_quit_driver()
         return result, suggested_name
 
-    def create_resume_pdf(self, enable_manual_review: bool = True) -> tuple[bytes, str]:
+    def create_resume_pdf(self) -> tuple[bytes, str]:
         style_path = self.style_manager.get_style_path()
         if style_path is None:
             raise ValueError("You must choose a style before generating the PDF.")
 
         html_resume = self.resume_generator.create_resume(style_path)
-        result = HTML_to_PDF(html_resume, self.driver, enable_manual_review=enable_manual_review)
+        result = HTML_to_PDF(html_resume, self.driver)
         self._safe_quit_driver()
         return result
 
-    def create_cover_letter(self, enable_manual_review: bool = True) -> tuple[bytes, str]:
+    def create_cover_letter(self) -> tuple[bytes, str]:
         style_path = self.style_manager.get_style_path()
         if style_path is None:
             raise ValueError("You must choose a style before generating the PDF.")
@@ -491,6 +491,6 @@ class ResumeFacade:
         )
         suggested_name = self._suggest_output_folder_name(self.job.link)
 
-        result = HTML_to_PDF(cover_letter_html, self.driver, enable_manual_review=enable_manual_review)
+        result = HTML_to_PDF(cover_letter_html, self.driver)
         self._safe_quit_driver()
         return result, suggested_name

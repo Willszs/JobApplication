@@ -28,11 +28,6 @@ def _resolve_chrome_profile_paths() -> tuple[str, str]:
     return user_data_dir, profile_dir
 
 
-def is_headless_mode_enabled() -> bool:
-    """Return True when JOBAI_HEADLESS asks Chrome to run without a visible window."""
-    return os.getenv("JOBAI_HEADLESS", "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def _chrome_profile_summary() -> str:
     user_data_dir, profile_dir = _resolve_chrome_profile_paths()
     return f"user-data-dir={user_data_dir}, profile-directory={profile_dir}"
@@ -57,11 +52,10 @@ def _chrome_startup_hint(error: Exception) -> str:
     return f"Chrome/Selenium 初始化失败。当前配置：{profile_summary}"
 
 
-def chrome_browser_options(headless: bool = False):
+def chrome_browser_options():
     logger.debug("Setting Chrome browser options")
     options = Options()
-    if not headless:
-        options.add_argument("--start-maximized")
+    options.add_argument("--start-maximized")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--ignore-certificate-errors")
@@ -79,9 +73,6 @@ def chrome_browser_options(headless: bool = False):
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
-    if headless:
-        options.add_argument("--headless=new")
-        options.add_argument("window-size=1200x800")
 
     # Reuse a persistent browser profile so login/cookies survive across runs.
     user_data_dir, profile_dir = _resolve_chrome_profile_paths()
@@ -91,13 +82,13 @@ def chrome_browser_options(headless: bool = False):
 
     logger.debug(f"Using Chrome user-data-dir: {user_data_dir}")
     logger.debug(f"Using Chrome profile-directory: {profile_dir}")
-    logger.debug(f"Using Chrome in {'headless' if headless else 'standard'} mode (incognito disabled)")
+    logger.debug("Using Chrome in standard mode (incognito disabled)")
     return options
 
 
-def init_browser(headless: bool = False) -> webdriver.Chrome:
+def init_browser() -> webdriver.Chrome:
     try:
-        options = chrome_browser_options(headless=headless)
+        options = chrome_browser_options()
         driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
         # Mask common Selenium fingerprints on every new document.
         driver.execute_cdp_cmd(
@@ -111,7 +102,7 @@ def init_browser(headless: bool = False) -> webdriver.Chrome:
                 """
             },
         )
-        logger.debug(f"Chrome browser initialized successfully. headless={headless}")
+        logger.debug("Chrome browser initialized successfully.")
         return driver
     except (SessionNotCreatedException, WebDriverException) as e:
         hint = _chrome_startup_hint(e)
