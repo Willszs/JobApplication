@@ -18,11 +18,11 @@ def _resolve_chrome_profile_paths() -> tuple[str, str]:
     Resolve persistent Chrome profile paths.
     Priority:
       1) JOBAI_CHROME_USER_DATA_DIR / JOBAI_CHROME_PROFILE_DIR env vars
-      2) ./user_data/chrome_profile and "Default"
+      2) ./user_data/chrome_profile_runtime and "Default"
     """
     user_data_dir = os.getenv("JOBAI_CHROME_USER_DATA_DIR")
     if not user_data_dir:
-        user_data_dir = str((Path.cwd() / "user_data" / "chrome_profile").resolve())
+        user_data_dir = str((Path.cwd() / "user_data" / "chrome_profile_runtime").resolve())
 
     profile_dir = os.getenv("JOBAI_CHROME_PROFILE_DIR", "Default")
     return user_data_dir, profile_dir
