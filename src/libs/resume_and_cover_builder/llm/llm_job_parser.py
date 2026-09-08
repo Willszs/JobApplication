@@ -9,9 +9,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
 from loguru import logger
-from langchain_text_splitters import TokenTextSplitter
-from langchain_community.embeddings import OpenAIEmbeddings
-from langchain_community.vectorstores import FAISS
 from config import LLM_MODEL
 
 # Load environment variables from the .env file
@@ -25,11 +22,11 @@ class LLMParser:
             ChatOpenAI(
                 model_name=LLM_MODEL,
                 openai_api_key=openai_api_key,
-                temperature=0.2
+                temperature=0.2,
+                request_timeout=60,
+                max_retries=1,
             )
         )
-        self.llm_embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
-        self.vectorstore = None  # Will be initialized after document loading
         self._full_text = ""        # 保存（裁剪+清洗后）的全文纯文本，用于正则/兜底
         self._trimmed_html = ""     # 保存域内裁剪后的 HTML，供分节抽取
         self._extracted_cache = None  # 一次性抽取结果缓存（dict）
@@ -337,7 +334,7 @@ class LLMParser:
 
     def set_body_html(self, body_html):
         """
-        Retrieves the job description from HTML, processes it, and initializes the vectorstore.
+        Retrieve and clean the job description text from HTML.
         Args:
             body_html (str): The HTML content to process.
         """
@@ -365,24 +362,11 @@ class LLMParser:
         self._full_text = self._sanitize_text_for_llm(merged_text, max_chars=18000)
         logger.debug(f"Full text (cleaned & compacted) length: {len(self._full_text)}")
 
-        # E) 构造单一文档供切块与向量化
-        from langchain_core.documents import Document
-        documents = [Document(page_content=self._full_text)]
+        # The cleaned text already fits comfortably in the model context window.
+        # Avoid a separate embeddings request, which can otherwise block startup.
+        logger.info("Job page text prepared. Starting AI extraction...")
 
-        # F) 切块
-        text_splitter = TokenTextSplitter(chunk_size=900, chunk_overlap=120)
-        all_splits = text_splitter.split_documents(documents)
-        logger.debug(f"Text split into {len(all_splits)} fragments (no truncation in logs).")
-
-        # G) 向量库
-        try:
-            self.vectorstore = FAISS.from_documents(documents=all_splits, embedding=self.llm_embeddings)
-            logger.debug("Vectorstore successfully initialized.")
-        except Exception as e:
-            logger.error(f"Error during vectorstore creation: {e}")
-            raise
-
-        # H) 重置缓存
+        # E) 重置缓存
         self._extracted_cache = None
 
     def _retrieve_context(self, query: str, top_k: int = 5) -> str:
@@ -394,14 +378,11 @@ class LLMParser:
         Returns:
             str: Concatenated text fragments.
         """
-        if not self.vectorstore:
-            raise ValueError("Vectorstore not initialized. Call set_body_html() first.")
+        if not self._full_text:
+            raise ValueError("Job text is empty. Call set_body_html() first.")
 
-        retriever = self.vectorstore.as_retriever()
-        retrieved_docs = retriever.get_relevant_documents(query)[:top_k]
-        context = "\n\n".join(doc.page_content for doc in retrieved_docs)
-        logger.debug(f"Context retrieved for query [{query}]:\n{context}\n--- END OF CONTEXT ---")
-        return context
+        logger.debug(f"Using cleaned job text for query [{query}].")
+        return self._full_text
 
     def _extract_information(self, question: str, retrieval_query: str) -> str:
         """
@@ -464,8 +445,8 @@ Answer:
         一次性抽取所有字段，严格 JSON 输出，键名固定：
         ["company_name","role","location","recruiter_email","job_description","job_responsibilities","job_requirements"]
         """
-        if not self.vectorstore:
-            raise ValueError("Vectorstore not initialized. Call set_body_html() first.")
+        if not self._full_text:
+            raise ValueError("Job text is empty. Call set_body_html() first.")
 
         # A) 更强语义的查询，扩大覆盖到正文/要求/职责/技术栈/福利等关键词；拉高 top_k
         context = self._retrieve_context(
@@ -487,6 +468,7 @@ Context:
 JSON:
 """)
 
+        logger.info("Requesting structured job details from the AI model...")
         chain = prompt | self.llm | JsonOutputParser()
         result = chain.invoke({"context": context})
 

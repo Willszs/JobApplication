@@ -247,10 +247,12 @@ def _set_default_style(style_manager: StyleManager) -> None:
     )
 
 def _build_resume_facade(parameters: dict, llm_api_key: str) -> ResumeFacade:
+    logger.info("Loading resume components...")
     from src.libs.resume_and_cover_builder import ResumeFacade, ResumeGenerator, StyleManager
     from src.resume_schemas.resume import Resume
     from src.utils.chrome_utils import init_browser
 
+    logger.info("Reading resume data and style...")
     plain_text_resume = _load_plain_text_resume(parameters)
     style_manager = StyleManager()
     _set_default_style(style_manager)

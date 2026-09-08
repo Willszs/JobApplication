@@ -21,7 +21,13 @@ load_dotenv()
 class LLMCoverLetterJobDescription:
     def __init__(self, openai_api_key, strings):
         self.llm_cheap = LoggerChatModel(
-            ChatOpenAI(model_name=LLM_MODEL, openai_api_key=openai_api_key, temperature=0.2)
+            ChatOpenAI(
+                model_name=LLM_MODEL,
+                openai_api_key=openai_api_key,
+                temperature=0.2,
+                request_timeout=60,
+                max_retries=1,
+            )
         )
         self.llm_embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
         self.strings = strings
