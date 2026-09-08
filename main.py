@@ -150,8 +150,11 @@ def create_resume_pdf_job_tailored(parameters: dict, llm_api_key: str):
     try:
         logger.info("Generating a CV based on provided parameters.")
         job_url = _prompt_job_url()
+        logger.info(f"Received job URL: {job_url}")
         resume_facade = _build_resume_facade(parameters, llm_api_key)
+        logger.info("Opening job URL in Chrome...")
         resume_facade.link_to_job(job_url)
+        logger.info("Job URL loaded. Generating tailored resume...")
         result_base64, suggested_name = resume_facade.create_resume_pdf_job_tailored()
         output_path = Path(parameters["outputFileDirectory"]) / suggested_name / "resume.pdf"
         _write_pdf(output_path, result_base64)
@@ -262,16 +265,17 @@ def _build_resume_facade(parameters: dict, llm_api_key: str) -> ResumeFacade:
         resume_object=resume_object,
         output_path=Path(parameters["outputFileDirectory"]),
     )
+    logger.info("Starting Chrome browser. This may take a while if ChromeDriver needs to download.")
     resume_facade.set_driver(init_browser())
+    logger.info("Chrome browser started successfully.")
     return resume_facade
 
 
 def _prompt_job_url() -> str:
-    questions = [inquirer.Text("job_url", message="Please enter the URL of the job description:")]
-    answers = inquirer.prompt(questions)
-    if not answers or not answers.get("job_url"):
+    job_url = input("Please enter the URL of the job description: ").strip()
+    if not job_url:
         raise ValueError("Job URL is required.")
-    return answers["job_url"]
+    return job_url
 
 
 def _write_pdf(output_path: Path, result_base64: str) -> None:
